@@ -44,6 +44,10 @@ async function main() {
     try {
       const stream = await runAgent(req.userId!, messages);
       for await (const [chunk] of stream) {
+        if (chunk.getType() !== "ai") {
+          continue;
+        }
+
         const text = extractText(chunk.content);
         if (text) {
           res.write(`data: ${JSON.stringify({ delta: text })}\n\n`);
