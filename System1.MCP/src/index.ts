@@ -7,6 +7,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { z } from "zod";
 import type { Request, Response } from "express";
 import { deleteEntries, endEntry, getActiveEntryForToday, getEntriesByDate, startEntry } from "./clockWorkClient.js";
+import { getProjectDetails, listProjects } from "./projectClient.js";
 import { NotLinkedError } from "./tokenClient.js";
 import { config } from "./config.js";
 import { registerOAuthRoutes } from "./oauthRoutes.js";
@@ -36,6 +37,16 @@ const getEntriesSchema = z.object({
     .string()
     .optional()
     .describe("Date to fetch entries for, as yyyy-MM-dd; omit to use today's date"),
+});
+
+const listProjectsSchema = z.object({
+  page: z.number().int().min(1).optional().describe("Page number; omit for page 1"),
+  pageSize: z.number().int().min(1).max(200).optional().describe("Results per page; omit for 50"),
+  search: z.string().optional().describe("Filter projects by name (partial match)"),
+});
+
+const getProjectDetailsSchema = z.object({
+  projectId: z.string().describe("Guid of the project to fetch details for"),
 });
 
 function textResult(payload: unknown) {
@@ -106,6 +117,34 @@ function buildServer(externalUserId: string): Server {
           },
         },
       },
+      {
+        name: "clockwork_list_projects",
+        description:
+          "List projects visible to the authenticated user's tenant, with basic info (name, description, " +
+          "owner, tags, members). Supports paging and an optional name filter. Use this before " +
+          "clockwork_get_project_details to find a project's id.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            page: { type: "number" },
+            pageSize: { type: "number" },
+            search: { type: "string" },
+          },
+        },
+      },
+      {
+        name: "clockwork_get_project_details",
+        description:
+          "Get full details for a single project by id, including its tasks, members, dates " +
+          "(start/end/completed/archived), and time spent.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            projectId: { type: "string" },
+          },
+          required: ["projectId"],
+        },
+      },
     ],
   }));
 
@@ -145,6 +184,18 @@ function buildServer(externalUserId: string): Server {
           const params = getEntriesSchema.parse(args);
           const entries = await getEntriesByDate(externalUserId, params.date);
           return textResult({ isOk: true, entries });
+        }
+
+        case "clockwork_list_projects": {
+          const params = listProjectsSchema.parse(args);
+          const result = await listProjects(externalUserId, params);
+          return textResult({ isOk: true, ...result });
+        }
+
+        case "clockwork_get_project_details": {
+          const params = getProjectDetailsSchema.parse(args);
+          const project = await getProjectDetails(externalUserId, params.projectId);
+          return textResult({ isOk: true, project });
         }
 
         default:

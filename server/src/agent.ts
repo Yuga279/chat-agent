@@ -1,46 +1,9 @@
-import { ChatOpenAI } from "@langchain/openai";
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
-import { tool } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
-import { config } from "./config.js";
-import { callMcpTool, isNotLinkedResult, listMcpTools } from "./mcpClient.js";
-
-const model =
-  config.modelProvider === "gemini"
-    ? new ChatGoogleGenerativeAI({
-        apiKey: config.geminiApiKey,
-        model: config.geminiModelName,
-        maxOutputTokens: 500,
-      })
-    : new ChatOpenAI({
-        apiKey: config.openRouterApiKey,
-        model: config.modelName,
-        maxTokens: 500,
-        configuration: { baseURL: "https://openrouter.ai/api/v1" },
-      });
-
-/** Builds one LangChain tool per MCP tool, bound to a single chat user via closure. */
-async function buildTools(externalUserId: string) {
-  const mcpTools = await listMcpTools();
-
-  return mcpTools.map((mcpTool) =>
-    tool(
-      async (args: Record<string, unknown>) => {
-        const result = await callMcpTool(externalUserId, mcpTool.name, args);
-        if (isNotLinkedResult(result)) {
-          return `This user hasn't linked their System1 account yet. Tell them to connect it here: ${result.linkUrl}`;
-        }
-
-        return JSON.stringify(result);
-      },
-      {
-        name: mcpTool.name,
-        description: mcpTool.description ?? mcpTool.name,
-        schema: mcpTool.inputSchema as never,
-      },
-    ),
-  );
-}
+import { model } from "./llm.js";
+import { buildTools } from "./agents/sharedTools.js";
+import { buildMemoryTools, composePreferenceContext } from "./memory/memoryTools.js";
+import { memoryService } from "./memory/memoryService.js";
+import { DEFAULT_TENANT_ID, wrapWithConversationMemory } from "./agents/shared.js";
 
 const SYSTEM_PROMPT = `You are a ClockWork time-tracking assistant, chatting with a human over text.
 
@@ -68,16 +31,32 @@ export async function runAgent(
   externalUserId: string,
   messages: Array<{ role: "user" | "assistant"; content: string }>,
 ) {
-  const tools = await buildTools(externalUserId);
+  const mcpTools = await buildTools(externalUserId);
+  const tools = [...mcpTools, ...buildMemoryTools(DEFAULT_TENANT_ID, externalUserId)];
   const agent = createReactAgent({ llm: model, tools });
 
-  return agent.stream(
+  const sessionId = externalUserId;
+  const latestUserMessage = [...messages].reverse().find((m) => m.role === "user");
+  if (latestUserMessage) {
+    await memoryService.addMessage(DEFAULT_TENANT_ID, externalUserId, sessionId, "user", latestUserMessage.content);
+    // Fire-and-forget: extraction shouldn't block the response.
+    memoryService.extractAndPersist(DEFAULT_TENANT_ID, externalUserId, latestUserMessage.content).catch((error) => {
+      console.error("Memory extraction failed:", error);
+    });
+  }
+
+  const preferenceContext = await composePreferenceContext(DEFAULT_TENANT_ID, externalUserId);
+  const systemPrompt = preferenceContext ? `${SYSTEM_PROMPT}\n\n${preferenceContext}` : SYSTEM_PROMPT;
+
+  const stream = await agent.stream(
     {
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: systemPrompt },
         ...messages.map((m) => ({ role: m.role, content: m.content })),
       ],
     },
     { streamMode: "messages" },
   );
+
+  return wrapWithConversationMemory(stream, externalUserId, sessionId, latestUserMessage?.content);
 }

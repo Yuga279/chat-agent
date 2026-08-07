@@ -12,7 +12,7 @@ export interface AuthedRequest extends Request {
   userId?: string;
 }
 
-export function requireAuth(req: AuthedRequest, res: Response, next: NextFunction): void {
+export async function requireAuth(req: AuthedRequest, res: Response, next: NextFunction): Promise<void> {
   const token = req.cookies?.[SESSION_COOKIE];
   if (!token) {
     res.status(401).json({ error: "Not authenticated" });
@@ -21,7 +21,7 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
 
   try {
     const payload = jwt.verify(token, config.jwtSecret) as { sub: string };
-    if (!findUserById(payload.sub)) {
+    if (!(await findUserById(payload.sub))) {
       res.status(401).json({ error: "Not authenticated" });
       return;
     }
@@ -50,14 +50,14 @@ export function registerAuthRoutes(app: Express): void {
       return;
     }
 
-    if (findUserByUsername(username)) {
+    if (await findUserByUsername(username)) {
       res.status(409).json({ error: "Username already taken" });
       return;
     }
 
     const id = uuid();
     const passwordHash = await bcrypt.hash(password, 10);
-    createUser(id, username, passwordHash);
+    await createUser(id, username, passwordHash);
     issueSession(res, id);
     res.status(201).json({ id, username });
   });
@@ -69,7 +69,7 @@ export function registerAuthRoutes(app: Express): void {
       return;
     }
 
-    const user = findUserByUsername(username);
+    const user = await findUserByUsername(username);
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
       res.status(401).json({ error: "Invalid username or password" });
       return;
@@ -84,7 +84,7 @@ export function registerAuthRoutes(app: Express): void {
     res.status(204).send();
   });
 
-  app.get("/auth/me", (req: AuthedRequest, res: Response) => {
+  app.get("/auth/me", async (req: AuthedRequest, res: Response) => {
     const token = req.cookies?.[SESSION_COOKIE];
     if (!token) {
       res.status(200).json({ authenticated: false });
@@ -93,7 +93,7 @@ export function registerAuthRoutes(app: Express): void {
 
     try {
       const payload = jwt.verify(token, config.jwtSecret) as { sub: string };
-      const user = findUserById(payload.sub);
+      const user = await findUserById(payload.sub);
       if (!user) {
         res.status(200).json({ authenticated: false });
         return;

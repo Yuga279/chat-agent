@@ -1,6 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
-import Database from "better-sqlite3";
+import { MongoClient, type Db } from "mongodb";
 import { config } from "./config.js";
 
 export interface UserRow {
@@ -10,28 +8,32 @@ export interface UserRow {
   createdAt: string;
 }
 
-fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
-const db = new Database(config.dbPath);
+let client: MongoClient | undefined;
+let db: Db | undefined;
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    username TEXT UNIQUE NOT NULL,
-    passwordHash TEXT NOT NULL,
-    createdAt TEXT NOT NULL
-  )
-`);
+export async function connectDb(): Promise<void> {
+  client = new MongoClient(config.mongoUri);
+  await client.connect();
+  db = client.db(config.mongoDbName);
 
-export function createUser(id: string, username: string, passwordHash: string): void {
-  db.prepare("INSERT INTO users (id, username, passwordHash, createdAt) VALUES (@id, @username, @passwordHash, @now)").run(
-    { id, username, passwordHash, now: new Date().toISOString() },
-  );
+  await db.collection<UserRow>("users").createIndex({ username: 1 }, { unique: true });
 }
 
-export function findUserByUsername(username: string): UserRow | undefined {
-  return db.prepare<{ username: string }, UserRow>("SELECT * FROM users WHERE username = @username").get({ username });
+export function getDb(): Db {
+  if (!db) throw new Error("Database not connected - call connectDb() before using it.");
+  return db;
 }
 
-export function findUserById(id: string): UserRow | undefined {
-  return db.prepare<{ id: string }, UserRow>("SELECT * FROM users WHERE id = @id").get({ id });
+export async function createUser(id: string, username: string, passwordHash: string): Promise<void> {
+  await getDb()
+    .collection<UserRow>("users")
+    .insertOne({ id, username, passwordHash, createdAt: new Date().toISOString() });
+}
+
+export async function findUserByUsername(username: string): Promise<UserRow | null> {
+  return getDb().collection<UserRow>("users").findOne({ username }, { projection: { _id: 0 } });
+}
+
+export async function findUserById(id: string): Promise<UserRow | null> {
+  return getDb().collection<UserRow>("users").findOne({ id }, { projection: { _id: 0 } });
 }

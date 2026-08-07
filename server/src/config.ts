@@ -15,7 +15,8 @@ export const config = {
   geminiApiKey: process.env.GEMINI_API_KEY,
   geminiModelName: process.env.GEMINI_MODEL_NAME ?? "gemini-2.5-flash",
   jwtSecret: requireEnv("JWT_SECRET"),
-  dbPath: process.env.DB_PATH ?? "./data/chat-agent.db",
+  mongoUri: process.env.MONGO_URI ?? "mongodb://localhost:27017/",
+  mongoDbName: process.env.MONGO_DB_NAME ?? "chat_agent",
   port: Number(process.env.PORT ?? 3200),
 };
 
