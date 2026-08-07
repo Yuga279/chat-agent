@@ -9,9 +9,20 @@ function requireEnv(name: string): string {
 
 export const config = {
   mcpServerUrl: requireEnv("MCP_SERVER_URL"),
-  openRouterApiKey: requireEnv("OPENROUTER_API_KEY"),
+  modelProvider: process.env.MODEL_PROVIDER ?? "openrouter",
+  openRouterApiKey: process.env.OPENROUTER_API_KEY,
   modelName: process.env.MODEL_NAME ?? "anthropic/claude-sonnet-4.5",
+  geminiApiKey: process.env.GEMINI_API_KEY,
+  geminiModelName: process.env.GEMINI_MODEL_NAME ?? "gemini-2.5-flash",
   jwtSecret: requireEnv("JWT_SECRET"),
   dbPath: process.env.DB_PATH ?? "./data/chat-agent.db",
   port: Number(process.env.PORT ?? 3200),
 };
+
+if (config.modelProvider === "gemini" && !config.geminiApiKey) {
+  throw new Error("Missing required environment variable: GEMINI_API_KEY (MODEL_PROVIDER=gemini)");
+}
+
+if (config.modelProvider === "openrouter" && !config.openRouterApiKey) {
+  throw new Error("Missing required environment variable: OPENROUTER_API_KEY (MODEL_PROVIDER=openrouter)");
+}

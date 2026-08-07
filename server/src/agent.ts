@@ -1,15 +1,23 @@
 import { ChatOpenAI } from "@langchain/openai";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { tool } from "@langchain/core/tools";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { config } from "./config.js";
 import { callMcpTool, isNotLinkedResult, listMcpTools } from "./mcpClient.js";
 
-const model = new ChatOpenAI({
-  apiKey: config.openRouterApiKey,
-  model: config.modelName,
-  maxTokens: 500,
-  configuration: { baseURL: "https://openrouter.ai/api/v1" },
-});
+const model =
+  config.modelProvider === "gemini"
+    ? new ChatGoogleGenerativeAI({
+        apiKey: config.geminiApiKey,
+        model: config.geminiModelName,
+        maxOutputTokens: 500,
+      })
+    : new ChatOpenAI({
+        apiKey: config.openRouterApiKey,
+        model: config.modelName,
+        maxTokens: 500,
+        configuration: { baseURL: "https://openrouter.ai/api/v1" },
+      });
 
 /** Builds one LangChain tool per MCP tool, bound to a single chat user via closure. */
 async function buildTools(externalUserId: string) {
