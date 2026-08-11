@@ -1,4 +1,4 @@
-import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { createAgent } from "langchain";
 import { model } from "../llm.js";
 import { buildTools } from "./sharedTools.js";
 import { buildMemoryTools, composePreferenceContext } from "../memory/memoryTools.js";
@@ -21,7 +21,7 @@ export async function runResearchAgent(
 ) {
   const mcpTools = await buildTools(externalUserId);
   const tools = [...mcpTools, ...buildMemoryTools(DEFAULT_TENANT_ID, externalUserId)];
-  const agent = createReactAgent({ llm: model, tools });
+  const agent = createAgent({ model, tools });
 
   const sessionId = `${externalUserId}:research`;
   const latestUserMessage = [...messages].reverse().find((m) => m.role === "user");

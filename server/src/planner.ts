@@ -21,10 +21,14 @@ list projects/tasks).
 - "research": investigates and synthesizes information (gathers data, summarizes findings).
 - "qna": answers direct questions from general knowledge or remembered facts, no action or investigation.
 
-Set isMultiStep=true ONLY when the request genuinely requires more than one distinct step, especially when it \
-would benefit from more than one of the agents above (e.g. "research how much time I spent on Project X last \
-month, then start tracking time for the follow-up task" needs research then clockwork). A single question or a \
-single action is NOT multi-step, even if it's complex to answer - set isMultiStep=false and leave steps empty.
+Set isMultiStep=true when the request genuinely requires more than one distinct step - either across different \
+agents above (e.g. "research how much time I spent on Project X last month, then start tracking time for the \
+follow-up task" needs research then clockwork), OR a single broad research question that naturally breaks into \
+several ordered sub-investigations under "research" alone (e.g. "research the best approach for X" might need \
+separate steps to survey existing options, compare tradeoffs, and check what's already been tried before). \
+Prefer decomposing an open-ended research request into concrete sub-steps rather than leaving it as one vague \
+step. A single, narrow question or a single action is NOT multi-step - set isMultiStep=false and leave steps \
+empty.
 
 When isMultiStep is true, give the goal a short title and list 2-5 ordered steps, each tagged with the agent \
 that should perform it.`;

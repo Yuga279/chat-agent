@@ -12,8 +12,15 @@ import { runResearchAgent } from "./agents/researchAgent.js";
 import { runQnaAgent } from "./agents/qnaAgent.js";
 import { routeToAgent } from "./router.js";
 import { planGoal } from "./planner.js";
+import { classifyApproval } from "./approval.js";
 import { goalService } from "./memory/goalService.js";
 import { DEFAULT_TENANT_ID } from "./constants.js";
+import type { GoalRecord } from "./memory/types.js";
+
+function formatPlanPrompt(goal: GoalRecord): string {
+  const steps = goal.steps.map((s, i) => `${i + 1}. [${s.agent}] ${s.description}`).join("\n");
+  return `Here's my plan for "${goal.title}":\n${steps}\n\nShall I go ahead? (yes/no)`;
+}
 
 const AGENT_RUNNERS = {
   clockwork: runAgent,
@@ -59,74 +66,104 @@ async function main() {
     const userId = req.userId!;
     const latestUserMessage = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
 
-    let agentName: AgentName;
-    let goalId: string | null = null;
-    let stepDescription: string | null = null;
-
-    if (typeof agent === "string" && agent in AGENT_RUNNERS) {
-      // Explicit client override always wins, and doesn't touch goal tracking.
-      agentName = agent as AgentName;
-    } else {
-      const activeGoal = await goalService.getActiveGoal(DEFAULT_TENANT_ID, userId);
-      const currentStep = activeGoal?.steps[activeGoal.currentStepIndex];
-
-      if (activeGoal && currentStep) {
-        // Resume an in-progress goal: the next pending step decides the agent, not the raw message.
-        agentName = currentStep.agent;
-        goalId = activeGoal.id;
-        stepDescription = currentStep.description;
-      } else {
-        const plan = await planGoal(latestUserMessage);
-        if (plan) {
-          const goal = await goalService.createGoal(DEFAULT_TENANT_ID, userId, plan.title, plan.steps);
-          agentName = goal.steps[0].agent;
-          goalId = goal.id;
-          stepDescription = goal.steps[0].description;
-        } else {
-          agentName = await routeToAgent(latestUserMessage);
-        }
-      }
-    }
-
-    const runAgentFn = AGENT_RUNNERS[agentName];
-    const agentMessages = stepDescription
-      ? [...messages.slice(0, -1), { role: "user", content: `${latestUserMessage}\n\n(Current step to work on: ${stepDescription})` }]
-      : messages;
-
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders();
-    res.write(`data: ${JSON.stringify({ agent: agentName, step: stepDescription })}\n\n`);
 
     try {
-      const stream = await runAgentFn(userId, agentMessages);
-      for await (const [chunk] of stream) {
-        if (chunk.getType() !== "ai") {
-          continue;
-        }
+      let agentName: AgentName | null = null;
+      let goalId: string | null = null;
+      let stepDescription: string | null = null;
+      // Set instead of agentName when this turn is fully handled without running any specialist
+      // agent - e.g. presenting a plan for approval, or acknowledging a rejection.
+      let directResponseText: string | null = null;
 
-        const text = extractText(chunk.content);
-        if (text) {
-          res.write(`data: ${JSON.stringify({ delta: text })}\n\n`);
+      if (typeof agent === "string" && agent in AGENT_RUNNERS) {
+        // Explicit client override always wins, and doesn't touch goal tracking.
+        agentName = agent as AgentName;
+      } else {
+        const proposedGoal = await goalService.getProposedGoal(DEFAULT_TENANT_ID, userId);
+
+        if (proposedGoal) {
+          // A plan is awaiting the user's go-ahead - this turn only interprets their reply to it,
+          // it never runs a specialist agent directly (human-in-the-loop gate).
+          const decision = await classifyApproval(latestUserMessage);
+          if (decision === "approve") {
+            const approved = await goalService.approveGoal(proposedGoal.id);
+            const firstStep = approved?.steps[approved.currentStepIndex];
+            if (approved && firstStep) {
+              agentName = firstStep.agent;
+              goalId = approved.id;
+              stepDescription = firstStep.description;
+            }
+          } else if (decision === "reject") {
+            await goalService.abandonGoal(proposedGoal.id);
+            directResponseText = "No problem, I've cancelled that plan. Let me know if you'd like a different approach.";
+          } else {
+            directResponseText = `I didn't catch a clear yes or no. ${formatPlanPrompt(proposedGoal)}`;
+          }
+        } else {
+          const activeGoal = await goalService.getActiveGoal(DEFAULT_TENANT_ID, userId);
+          const currentStep = activeGoal?.steps[activeGoal.currentStepIndex];
+
+          if (activeGoal && currentStep) {
+            // Resume an in-progress (already-approved) goal: the next pending step decides the
+            // agent, not the raw message.
+            agentName = currentStep.agent;
+            goalId = activeGoal.id;
+            stepDescription = currentStep.description;
+          } else {
+            const plan = await planGoal(latestUserMessage);
+            if (plan) {
+              // Propose, don't execute yet - wait for the user's approval on the next turn.
+              const goal = await goalService.proposeGoal(DEFAULT_TENANT_ID, userId, plan.title, plan.steps);
+              directResponseText = formatPlanPrompt(goal);
+            } else {
+              agentName = await routeToAgent(latestUserMessage);
+            }
+          }
         }
       }
 
-      if (goalId) {
-        const updatedGoal = await goalService.advanceCurrentStep(goalId);
-        if (updatedGoal) {
-          const doneCount = updatedGoal.steps.filter((s) => s.status === "done").length;
-          res.write(
-            `data: ${JSON.stringify({
-              goalProgress: {
-                title: updatedGoal.title,
-                status: updatedGoal.status,
-                doneSteps: doneCount,
-                totalSteps: updatedGoal.steps.length,
-                nextStep: updatedGoal.steps[updatedGoal.currentStepIndex]?.description ?? null,
-              },
-            })}\n\n`,
-          );
+      res.write(`data: ${JSON.stringify({ agent: agentName, step: stepDescription })}\n\n`);
+
+      if (directResponseText) {
+        res.write(`data: ${JSON.stringify({ delta: directResponseText })}\n\n`);
+      } else if (agentName) {
+        const runAgentFn = AGENT_RUNNERS[agentName];
+        const agentMessages = stepDescription
+          ? [...messages.slice(0, -1), { role: "user", content: `${latestUserMessage}\n\n(Current step to work on: ${stepDescription})` }]
+          : messages;
+
+        const stream = await runAgentFn(userId, agentMessages);
+        for await (const [chunk] of stream) {
+          if (chunk.getType() !== "ai") {
+            continue;
+          }
+
+          const text = extractText(chunk.content);
+          if (text) {
+            res.write(`data: ${JSON.stringify({ delta: text })}\n\n`);
+          }
+        }
+
+        if (goalId) {
+          const updatedGoal = await goalService.advanceCurrentStep(goalId);
+          if (updatedGoal) {
+            const doneCount = updatedGoal.steps.filter((s) => s.status === "done").length;
+            res.write(
+              `data: ${JSON.stringify({
+                goalProgress: {
+                  title: updatedGoal.title,
+                  status: updatedGoal.status,
+                  doneSteps: doneCount,
+                  totalSteps: updatedGoal.steps.length,
+                  nextStep: updatedGoal.steps[updatedGoal.currentStepIndex]?.description ?? null,
+                },
+              })}\n\n`,
+            );
+          }
         }
       }
 

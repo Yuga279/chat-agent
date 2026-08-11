@@ -66,7 +66,7 @@ export interface IMemoryExtractor {
   extract(message: string): Promise<ExtractedFact[]>;
 }
 
-export type GoalStatus = "active" | "done" | "abandoned";
+export type GoalStatus = "proposed" | "active" | "done" | "abandoned";
 export type GoalStepStatus = "pending" | "done";
 
 export interface GoalStep {

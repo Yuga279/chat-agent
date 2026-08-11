@@ -36,7 +36,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - Otherwise, if the user has an active `GoalRecord` (see Goals below) with a pending current step, that step's `agent` is used, and the step's `description` is appended to the outgoing user message as `(Current step to work on: ...)` so the agent knows what it's meant to accomplish right now — the raw latest user message is *not* what drives agent choice in this branch.
    - Otherwise, `planGoal()` is tried first (may turn a single message into a whole multi-step goal); if it declines, `routeToAgent()` makes a single-agent routing choice.
 3. **Streaming response**: sets SSE headers (`Content-Type: text/event-stream`, no caching, keep-alive) and writes newline-delimited `data: {...}\n\n` JSON events in this order:
-   - `{ agent, step }` — emitted immediately, before any model output, so the client can show which agent/step is active.
+   - `{ agent, step }` — emitted immediately, before any model output, so the client can show which agent/step is active. Both are `null` when the turn is a goal-approval exchange handled without running any specialist agent (see Goals below).
    - `{ delta }` — one per streamed AI-message chunk of text (non-`"ai"`-typed chunks, e.g. tool-call chunks, are filtered out entirely; nothing is sent to the client about tool calls in progress).
    - `{ goalProgress: { title, status, doneSteps, totalSteps, nextStep } }` — only when this turn was driven by an active goal; emitted **after** the agent finishes and the goal is advanced via `goalService.advanceCurrentStep()`.
    - `{ error }` — only on a caught exception from the agent run; the raw error is logged server-side (`console.error`) but never leaked to the client.
@@ -95,11 +95,18 @@ A deliberately narrow layer over four MongoDB collections (`src/memory/collectio
 
 ### Goals (`src/memory/goalService.ts`)
 
-`GoalRecord`s (`goals` collection) represent a persistent, multi-step objective spanning turns/sessions. Each `GoalStep` has `{description, agent, status: "pending"|"done"}`.
+`GoalRecord`s (`goals` collection) represent a persistent, multi-step objective spanning turns/sessions. Each `GoalStep` has `{description, agent, status: "pending"|"done"}`. A goal's own `status` is `"proposed" | "active" | "done" | "abandoned"`.
 
-- `getActiveGoal()` returns the most recently *created* active goal (sorted `createdAt: -1`) — if a user somehow has more than one active goal, index.ts always resumes the newest, and the others are invisible to the main chat flow (though still visible via the `get_active_goals` tool's `listActiveGoals`, which lists up to 5).
+- **Human-in-the-loop approval gate**: `planGoal()`'s decomposition is never executed immediately. `index.ts` calls `goalService.proposeGoal()`, which inserts the goal with `status: "proposed"` and immediately returns a formatted plan (`formatPlanPrompt()` — title + numbered `[agent] description` list + "Shall I go ahead? (yes/no)") as the turn's entire response — no specialist agent runs on this turn, no tool calls happen, and `goalId`/`agentName` in that SSE `{agent, step}` event are both `null`.
+- On the *next* turn, `index.ts` checks `goalService.getProposedGoal()` **before** `getActiveGoal()`. If a proposed goal is pending, that turn is entirely consumed interpreting the reply via `classifyApproval()` (`src/approval.ts`, a `createModel(60)` structured classifier, same pattern as `router.ts`) — it never falls through to routing or an active-goal step in this branch:
+  - `"approve"` → `goalService.approveGoal()` flips status to `"active"`; the turn then runs step 0 exactly like resuming an active goal.
+  - `"reject"` → `goalService.abandonGoal()`; the turn responds with a canned cancellation message, no agent run.
+  - `"unclear"` → the goal stays `"proposed"`; the turn re-sends the same plan prompt rather than guessing which way to interpret an ambiguous reply.
+- This gate only applies when there's no explicit `agent` override on the request (same rule as goal tracking generally — an explicit `agent` field skips goals entirely, proposed or active).
+- `getActiveGoal()` returns the most recently *created* active goal (sorted `createdAt: -1`) — if a user somehow has more than one active goal, index.ts always resumes the newest, and the others are invisible to the main chat flow (though still visible via the `get_active_goals` tool's `listActiveGoals`, which lists up to 5 and is unaffected by the proposed/active split above — it still only lists `status: "active"`).
 - `advanceCurrentStep(goalId)` marks the current step `"done"` and increments `currentStepIndex`; the goal's own `status` flips to `"done"` once the index runs past the last step. There's no step-level failure state — a step can only be `"pending"` or `"done"`, so a failed tool call inside a goal step still gets marked done on the next `advanceCurrentStep()` call (called unconditionally after every successful *agent run*, not conditioned on whether the step's task actually succeeded).
-- `abandonGoal()` exists (sets `status: "abandoned"`) but nothing in `index.ts` or the memory tools currently calls it — there's no user-facing way to cancel a goal yet; an active goal will keep being resumed on every turn until its steps run out.
+- `abandonGoal()` is now reachable from the rejection path above, but there's still no way to cancel an already-**active** (approved) goal mid-flight — once approved, it runs to completion turn by turn regardless of what the user says in between.
+- `planner.ts`'s `PLANNER_PROMPT` deliberately also encourages decomposing a single broad **research** request into multiple ordered `research`-tagged steps (not just cross-agent plans) — this exists so open-ended research questions get more scrutiny/approval touchpoints via the gate above rather than running as one large opaque tool-calling session.
 
 ### Auth (`src/auth.ts`, `src/db.ts`)
 

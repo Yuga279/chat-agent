@@ -6,14 +6,15 @@ const NO_ID_PROJECTION = { projection: { _id: 0 } } as const;
 
 /** Manages persistent, multi-step goals that survive across turns and sessions. */
 export class GoalService {
-  async createGoal(tenantId: string, userId: string, title: string, steps: Array<Pick<GoalStep, "description" | "agent">>): Promise<GoalRecord> {
+  /** Creates a goal awaiting the user's go-ahead - it won't be picked up by getActiveGoal until approved. */
+  async proposeGoal(tenantId: string, userId: string, title: string, steps: Array<Pick<GoalStep, "description" | "agent">>): Promise<GoalRecord> {
     const now = new Date().toISOString();
     const goal: GoalRecord = {
       id: randomUUID(),
       tenantId,
       userId,
       title,
-      status: "active",
+      status: "proposed",
       steps: steps.map((s) => ({ ...s, status: "pending" })),
       currentStepIndex: 0,
       createdAt: now,
@@ -22,6 +23,18 @@ export class GoalService {
 
     await goalsCollection().insertOne(goal);
     return goal;
+  }
+
+  /** Most recently proposed goal still awaiting the user's approval, if any. */
+  async getProposedGoal(tenantId: string, userId: string): Promise<GoalRecord | null> {
+    return goalsCollection().findOne({ tenantId, userId, status: "proposed" }, { ...NO_ID_PROJECTION, sort: { createdAt: -1 } });
+  }
+
+  /** Approves a proposed goal so it starts running on this and subsequent turns. */
+  async approveGoal(goalId: string): Promise<GoalRecord | null> {
+    const updatedAt = new Date().toISOString();
+    await goalsCollection().updateOne({ id: goalId, status: "proposed" }, { $set: { status: "active", updatedAt } });
+    return goalsCollection().findOne({ id: goalId }, NO_ID_PROJECTION);
   }
 
   /** Most recently created active goal for a user, if any. */

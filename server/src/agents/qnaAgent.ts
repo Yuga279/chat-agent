@@ -1,4 +1,4 @@
-import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { createAgent } from "langchain";
 import { model } from "../llm.js";
 import { buildMemoryTools, composePreferenceContext } from "../memory/memoryTools.js";
 import { memoryService } from "../memory/memoryService.js";
@@ -19,7 +19,7 @@ export async function runQnaAgent(
   messages: Array<{ role: "user" | "assistant"; content: string }>,
 ) {
   const tools = buildMemoryTools(DEFAULT_TENANT_ID, externalUserId);
-  const agent = createReactAgent({ llm: model, tools });
+  const agent = createAgent({ model, tools });
 
   const sessionId = `${externalUserId}:qna`;
   const latestUserMessage = [...messages].reverse().find((m) => m.role === "user");
