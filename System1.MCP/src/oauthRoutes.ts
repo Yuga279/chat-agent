@@ -6,7 +6,10 @@ import { saveRefreshToken } from "./tokenStore.js";
 
 export function registerOAuthRoutes(app: Express): void {
   app.get("/oauth/link", (req: Request, res: Response) => {
-    const externalUserId = typeof req.query.externalUserId === "string" ? req.query.externalUserId : undefined;
+    // Trim stray trailing punctuation (e.g. a ")" pulled in by a client that mangled a
+    // markdown-rendered link) so a mis-rendered link can't silently link the wrong id.
+    const rawExternalUserId = typeof req.query.externalUserId === "string" ? req.query.externalUserId : undefined;
+    const externalUserId = rawExternalUserId?.replace(/[).,;:!?]+$/, "");
     if (!externalUserId) {
       res.status(400).send("Missing required query parameter: externalUserId");
       return;

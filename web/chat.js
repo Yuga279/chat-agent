@@ -13,7 +13,19 @@ let history = [];
 
 function linkify(text) {
   const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return escaped.replace(/https?:\/\/\S+/g, (url) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`);
+  // Markdown links first, e.g. [here](https://example.com) - must run before the bare-URL pass
+  // below, otherwise the bare-URL regex greedily swallows the closing markdown ")".
+  const withMdLinks = escaped.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_match, label, url) => `<a href="${url}" target="_blank" rel="noopener">${label}</a>`,
+  );
+  // Bare URLs not already wrapped in an <a> tag; trailing punctuation is excluded so a
+  // sentence-ending "." or "," isn't pulled into the link.
+  return withMdLinks.replace(/(?<!href=")https?:\/\/\S+/g, (url) => {
+    const trailingPunct = url.match(/[).,;:!?]+$/)?.[0] ?? "";
+    const cleanUrl = trailingPunct ? url.slice(0, -trailingPunct.length) : url;
+    return `<a href="${cleanUrl}" target="_blank" rel="noopener">${cleanUrl}</a>${trailingPunct}`;
+  });
 }
 
 function appendMessage(role, text) {

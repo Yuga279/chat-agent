@@ -59,6 +59,7 @@ export function isNotLinkedResult(payload: unknown): payload is NotLinkedToolRes
 
 /** Calls an MCP tool as the given chat user; the MCP server resolves their linked System1 identity. */
 export async function callMcpTool(externalUserId: string, name: string, args: Record<string, unknown>): Promise<unknown> {
+  console.log(`[mcp] calling tool "${name}" with args:`, JSON.stringify(args));
   const result = await withClient(externalUserId, (client) =>
     client.request({ method: "tools/call", params: { name, arguments: args } }, CallToolResultSchema),
   );
@@ -68,5 +69,7 @@ export async function callMcpTool(externalUserId: string, name: string, args: Re
     throw new Error(`Tool "${name}" returned no text content.`);
   }
 
-  return JSON.parse(textContent.text);
+  const parsed = JSON.parse(textContent.text);
+  console.log(`[mcp] tool "${name}" result:`, JSON.stringify(parsed));
+  return parsed;
 }
