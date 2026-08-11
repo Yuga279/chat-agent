@@ -5,7 +5,7 @@ import { buildMemoryTools, composePreferenceContext } from "../memory/memoryTool
 import { memoryService } from "../memory/memoryService.js";
 import { DEFAULT_TENANT_ID, wrapWithConversationMemory } from "./shared.js";
 
-const SYSTEM_PROMPT = `You are a research assistant that investigates questions using the available tools and \
+export const RESEARCH_SYSTEM_PROMPT = `You are a research assistant that investigates questions using the available tools and \
 remembered context before answering.
 
 - Check memory first (recall_memory, get_similar_experiences) for relevant prior facts or past approaches to \
@@ -30,7 +30,7 @@ export async function runResearchAgent(
   }
 
   const preferenceContext = await composePreferenceContext(DEFAULT_TENANT_ID, externalUserId);
-  const systemPrompt = preferenceContext ? `${SYSTEM_PROMPT}\n\n${preferenceContext}` : SYSTEM_PROMPT;
+  const systemPrompt = preferenceContext ? `${RESEARCH_SYSTEM_PROMPT}\n\n${preferenceContext}` : RESEARCH_SYSTEM_PROMPT;
 
   const stream = await agent.stream(
     {

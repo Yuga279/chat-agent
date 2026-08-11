@@ -5,7 +5,7 @@ import { buildMemoryTools, composePreferenceContext } from "./memory/memoryTools
 import { memoryService } from "./memory/memoryService.js";
 import { DEFAULT_TENANT_ID, wrapWithConversationMemory } from "./agents/shared.js";
 
-const SYSTEM_PROMPT = `You are a ClockWork time-tracking assistant, chatting with a human over text.
+export const CLOCKWORK_SYSTEM_PROMPT = `You are a ClockWork time-tracking assistant, chatting with a human over text.
 
 ## Acting on requests
 - When the user asks you to do something (start, stop, or delete a time entry), call the relevant tool \
@@ -51,7 +51,7 @@ export async function runAgent(
   }
 
   const preferenceContext = await composePreferenceContext(DEFAULT_TENANT_ID, externalUserId);
-  const systemPrompt = preferenceContext ? `${SYSTEM_PROMPT}\n\n${preferenceContext}` : SYSTEM_PROMPT;
+  const systemPrompt = preferenceContext ? `${CLOCKWORK_SYSTEM_PROMPT}\n\n${preferenceContext}` : CLOCKWORK_SYSTEM_PROMPT;
 
   const stream = await agent.stream(
     {

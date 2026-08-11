@@ -10,13 +10,25 @@ export interface UserRow {
 
 let client: MongoClient | undefined;
 let db: Db | undefined;
+let connectPromise: Promise<void> | undefined;
 
+/**
+ * Idempotent: safe to call from multiple entry points (the Express server's startup, and
+ * standalone LangGraph graph modules hosted by `langgraphjs dev`/platform, which have no
+ * shared startup path with `index.ts`). Concurrent callers await the same in-flight connect.
+ */
 export async function connectDb(): Promise<void> {
-  client = new MongoClient(config.mongoUri);
-  await client.connect();
-  db = client.db(config.mongoDbName);
+  if (db) return;
+  if (!connectPromise) {
+    connectPromise = (async () => {
+      client = new MongoClient(config.mongoUri);
+      await client.connect();
+      db = client.db(config.mongoDbName);
 
-  await db.collection<UserRow>("users").createIndex({ username: 1 }, { unique: true });
+      await db.collection<UserRow>("users").createIndex({ username: 1 }, { unique: true });
+    })();
+  }
+  await connectPromise;
 }
 
 export function getDb(): Db {

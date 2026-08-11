@@ -3,34 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <title>System1 Chat</title>
-    <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <div id="auth-view" class="view">
-      <form id="auth-form">
-        <h1>System1 Chat</h1>
-        <input id="username" type="text" placeholder="Username" autocomplete="username" required />
-        <input id="password" type="password" placeholder="Password" autocomplete="current-password" required />
-        <div class="auth-actions">
-          <button type="submit" data-action="login">Log in</button>
-          <button type="button" id="signup-btn">Sign up</button>
-        </div>
-        <p id="auth-error" class="error"></p>
-      </form>
-    </div>
-
-    <div id="chat-view" class="view hidden">
-      <header>
-        <span id="whoami"></span>
-        <button id="logout-btn">Log out</button>
-      </header>
-      <div id="messages"></div>
-      <form id="chat-form">
-        <input id="chat-input" type="text" placeholder="Ask about your ClockWork entries..." autocomplete="off" />
-        <button type="submit">Send</button>
-      </form>
-    </div>
-
-    <script src="chat.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

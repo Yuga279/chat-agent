@@ -4,7 +4,7 @@ import { buildMemoryTools, composePreferenceContext } from "../memory/memoryTool
 import { memoryService } from "../memory/memoryService.js";
 import { DEFAULT_TENANT_ID, wrapWithConversationMemory } from "./shared.js";
 
-const SYSTEM_PROMPT = `You are a Q&A assistant. Answer the user's question directly and concisely.
+export const QNA_SYSTEM_PROMPT = `You are a Q&A assistant. Answer the user's question directly and concisely.
 
 - Use recall_memory to check for any remembered fact or preference relevant to the question before answering \
 (e.g. if asked "why did you generate PDF", recall the preference history instead of guessing).
@@ -28,7 +28,7 @@ export async function runQnaAgent(
   }
 
   const preferenceContext = await composePreferenceContext(DEFAULT_TENANT_ID, externalUserId);
-  const systemPrompt = preferenceContext ? `${SYSTEM_PROMPT}\n\n${preferenceContext}` : SYSTEM_PROMPT;
+  const systemPrompt = preferenceContext ? `${QNA_SYSTEM_PROMPT}\n\n${preferenceContext}` : QNA_SYSTEM_PROMPT;
 
   const stream = await agent.stream(
     {

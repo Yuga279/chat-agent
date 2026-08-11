@@ -16,6 +16,10 @@ import { classifyApproval } from "./approval.js";
 import { goalService } from "./memory/goalService.js";
 import { DEFAULT_TENANT_ID } from "./constants.js";
 import type { GoalRecord } from "./memory/types.js";
+import { createCopilotExpressHandler } from "@copilotkit/runtime/v2/express";
+import { CopilotRuntime } from "@copilotkit/runtime/v2";
+import { buildCopilotAgents } from "./copilotRuntime.js";
+import { ensureThreadOwnershipIndexes } from "./threadOwnership.js";
 
 function formatPlanPrompt(goal: GoalRecord): string {
   const steps = goal.steps.map((s, i) => `${i + 1}. [${s.agent}] ${s.description}`).join("\n");
@@ -31,7 +35,7 @@ const AGENT_RUNNERS = {
 type AgentName = keyof typeof AGENT_RUNNERS;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const webDir = path.resolve(__dirname, "../../web");
+const webDir = path.resolve(__dirname, "../../web/dist");
 
 function extractText(content: AIMessageChunk["content"]): string {
   if (typeof content === "string") {
@@ -47,6 +51,7 @@ function extractText(content: AIMessageChunk["content"]): string {
 async function main() {
   await connectDb();
   await ensureMemoryIndexes();
+  await ensureThreadOwnershipIndexes();
   console.log(`Connected to MongoDB (${config.mongoUri}${config.mongoDbName})`);
 
   const app = express();
@@ -55,6 +60,9 @@ async function main() {
   app.use(express.static(webDir));
 
   registerAuthRoutes(app);
+
+  const copilotRuntime = new CopilotRuntime({ agents: buildCopilotAgents });
+  app.use(createCopilotExpressHandler({ runtime: copilotRuntime, basePath: "/api/copilotkit" }));
 
   app.post("/api/chat", requireAuth, async (req: AuthedRequest, res) => {
     const { messages, agent } = req.body ?? {};

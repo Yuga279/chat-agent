@@ -1,0 +1,10 @@
+{
+  "node_version": "20",
+  "dependencies": ["."],
+  "graphs": {
+    "research": "./src/graph/researchGraph.ts:researchGraph",
+    "clockwork": "./src/graph/clockworkGraph.ts:clockworkGraph",
+    "qna": "./src/graph/qnaGraph.ts:qnaGraph"
+  },
+  "env": ".env"
+}
