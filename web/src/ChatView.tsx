@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { CopilotKit, CopilotChat, CopilotChatConfigurationProvider, useAgent } from "@copilotkit/react-core/v2";
+import {
+  CopilotKit,
+  CopilotChat,
+  CopilotChatConfigurationProvider,
+  useAgent,
+  useConfigureSuggestions,
+} from "@copilotkit/react-core/v2";
 import "@copilotkit/react-core/v2/styles.css";
 import { getThreads, createThread, logout, type ThreadRecord } from "./api.js";
 import ThreadPanel from "./ThreadPanel.js";
@@ -7,6 +13,24 @@ import InteractionRenderer from "./InteractionRenderer.js";
 import { resyncThreadMessages } from "./threadHistory.js";
 
 const AGENT_ID = "assistant";
+
+const STARTER_SUGGESTIONS = [
+  { title: "Start tracking time", message: "Start a time entry for the project I'm working on right now." },
+  { title: "Stop the current entry", message: "Stop my currently running time entry." },
+  { title: "What am I tracking?", message: "What time entry, if any, do I currently have running?" },
+  { title: "Research a topic", message: "Research the best approach for " },
+];
+
+/** Static starter suggestion pills shown before the first message - CopilotChat renders
+ * whatever useConfigureSuggestions registers automatically, so this just needs to run once
+ * under the CopilotChatConfigurationProvider tree. */
+function ChatSuggestions() {
+  useConfigureSuggestions({
+    available: "before-first-message",
+    suggestions: STARTER_SUGGESTIONS,
+  });
+  return null;
+}
 
 /** Loads the selected thread's prior messages into the client agent on mount - CopilotChat does
  * not fetch history for an existing threadId on its own, so switching threads would otherwise
@@ -83,6 +107,7 @@ export default function ChatView({ username, onLoggedOut }: { username: string; 
           <CopilotKit key={threadId} runtimeUrl="/api/copilotkit" credentials="include" useSingleEndpoint={false}>
             <CopilotChatConfigurationProvider agentId={AGENT_ID} threadId={threadId}>
               <ThreadHistoryLoader threadId={threadId} />
+              <ChatSuggestions />
               <InteractionRenderer />
               <CopilotChat className="research-chat" />
             </CopilotChatConfigurationProvider>

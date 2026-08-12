@@ -8,11 +8,13 @@ export function createModel(maxTokens: number) {
         apiKey: config.geminiApiKey,
         model: config.geminiModelName,
         maxOutputTokens: maxTokens,
+        streaming: true,
       })
     : new ChatOpenAI({
         apiKey: config.openRouterApiKey,
         model: config.modelName,
         maxTokens,
+        streaming: true,
         configuration: { baseURL: "https://openrouter.ai/api/v1" },
       });
 }

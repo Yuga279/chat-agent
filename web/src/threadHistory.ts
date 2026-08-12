@@ -27,3 +27,25 @@ export async function resyncThreadMessages(threadId: string): Promise<AgUiMessag
     return null;
   }
 }
+
+/**
+ * Resuming an interrupted run kicks off the graph's execute node asynchronously - the checkpoint
+ * this reads from may not yet contain the run's final assistant message the instant resolve()
+ * settles. A single immediate fetch can win a race against the still-running graph and freeze
+ * the transcript on a stale (pre-response) snapshot. Poll until the message count grows past
+ * `minCount`, or give up after `maxAttempts`.
+ */
+export async function resyncThreadMessagesUntilGrown(
+  threadId: string,
+  minCount: number,
+  maxAttempts = 8,
+  delayMs = 600,
+): Promise<AgUiMessage[] | null> {
+  let latest: AgUiMessage[] | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    latest = await resyncThreadMessages(threadId);
+    if (latest && latest.length > minCount) return latest;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return latest;
+}

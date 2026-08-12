@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useInterrupt, useAgent } from "@copilotkit/react-core/v2";
 import type { AgentInteraction, ResearchPlanState, ResearchPlanStep } from "./interactionTypes.js";
-import { resyncThreadMessages } from "./threadHistory.js";
+import { resyncThreadMessagesUntilGrown } from "./threadHistory.js";
 
 type Resolve = (payload?: unknown) => void;
 
@@ -188,24 +188,24 @@ export default function InteractionRenderer() {
       const value = (rawObj && typeof rawObj === "object" && !("type" in rawObj) && "value" in rawObj ? rawObj.value : rawObj) as AgentInteraction | undefined;
       const doResolve: Resolve = (payload) => {
         const result = resolve(payload);
-        // See resyncThreadMessages()'s doc comment. Confirmed via logging: resolve()'s own
-        // reported `newMessages` count is NOT a reliable signal that anything actually landed in
-        // agent.messages (the array it diffs against for that count never grows even when it
-        // reports 1+ new messages) - so always resync unconditionally after every resume rather
-        // than only when the count is suspiciously zero.
-        if (result && typeof (result as Promise<unknown>).then === "function") {
-          (result as Promise<unknown>)
-            .catch((error) => console.error("[InteractionRenderer] resolve() rejected:", error))
-            .finally(() => {
-              if (!agent) return;
-              resyncThreadMessages(agent.threadId).then((messages) => {
-                if (messages) agent.setMessages(messages as never);
-              });
-            });
-        } else if (agent) {
-          resyncThreadMessages(agent.threadId).then((messages) => {
+        // See resyncThreadMessagesUntilGrown()'s doc comment. Confirmed via logging: resolve()'s
+        // own reported `newMessages` count is NOT a reliable signal that anything actually landed
+        // in agent.messages (the array it diffs against for that count never grows even when it
+        // reports 1+ new messages) - so always resync unconditionally after every resume. A
+        // single immediate fetch can also race the still-running graph and land before its final
+        // assistant message is checkpointed, so poll until the message count grows past what was
+        // on screen before resolve() was called, rather than trusting the first response.
+        const baselineCount = agent?.messages.length ?? 0;
+        const runResync = () => {
+          if (!agent) return;
+          resyncThreadMessagesUntilGrown(agent.threadId, baselineCount).then((messages) => {
             if (messages) agent.setMessages(messages as never);
           });
+        };
+        if (result && typeof (result as Promise<unknown>).then === "function") {
+          (result as Promise<unknown>).catch((error) => console.error("[InteractionRenderer] resolve() rejected:", error)).finally(runResync);
+        } else {
+          runResync();
         }
       };
 
