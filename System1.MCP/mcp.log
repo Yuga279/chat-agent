@@ -1,6 +1,0 @@
-
-> system1-mcp@1.0.0 start
-> node dist/index.js
-
-Warning: Server is binding to 0.0.0.0 without DNS rebinding protection. Consider using the allowedHosts option to restrict allowed hosts, or use authentication to protect your server.
-System1 MCP server listening on port 3100

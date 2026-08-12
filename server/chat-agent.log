@@ -1,5 +1,0 @@
-
-> system1-chat-agent@1.0.0 start
-> node --env-file=.env dist/index.js
-
-System1 chat agent listening on port 3200

@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { useInterrupt } from "@copilotkit/react-core/v2";
+import { useInterrupt, useAgent } from "@copilotkit/react-core/v2";
 import type { AgentInteraction, ResearchPlanState, ResearchPlanStep } from "./interactionTypes.js";
+import { resyncThreadMessages } from "./threadHistory.js";
 
 type Resolve = (payload?: unknown) => void;
 
@@ -64,7 +65,7 @@ function reorder(steps: ResearchPlanStep[], id: string, direction: -1 | 1): Rese
 
 function PlanEditInteraction({ value, resolve }: { value: Extract<AgentInteraction, { type: "plan_edit" }>; resolve: Resolve }) {
   const [editing, setEditing] = useState(false);
-  const [steps, setSteps] = useState<ResearchPlanStep[]>([...value.plan.steps].sort((a, b) => a.order - b.order));
+  const [steps, setSteps] = useState<ResearchPlanStep[]>([...(value.plan?.steps ?? [])].sort((a, b) => a.order - b.order));
 
   function updateStep(id: string, patch: Partial<ResearchPlanStep>) {
     setSteps((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
@@ -161,17 +162,58 @@ function PlanEditInteraction({ value, resolve }: { value: Extract<AgentInteracti
  * active directly into the CopilotChat transcript, so this component itself renders nothing.
  */
 export default function InteractionRenderer() {
+  const { agent } = useAgent();
+
   useInterrupt({
     render: ({ event, resolve }) => {
-      const value = event?.value as AgentInteraction | undefined;
+      // useInterrupt's own toLegacyEvent() (@copilotkit/react-core) delivers this differently
+      // depending on which AG-UI path fired:
+      //  - legacy "on_interrupt" custom event: event.value is a JSON-*encoded string* of our
+      //    AgentInteraction. The pre-parsed object lives on the event's `rawEvent` field, which
+      //    copilotRuntime.ts's sanitizeEvents() deliberately strips from every event before it
+      //    reaches the browser (it also carries this graph's system prompt text) - so only the
+      //    string survives, and it must be JSON.parse()'d here.
+      //  - standard AG-UI interrupt path (a RUN_FINISHED with outcome "interrupt" - what
+      //    langgraphjs dev actually emits here): event.value is the *unwrapped* LangGraph
+      //    Interrupt object `{ id, value: <our payload> }`, not the payload itself.
+      let raw: unknown = event?.value;
+      if (typeof raw === "string") {
+        try {
+          raw = JSON.parse(raw);
+        } catch {
+          raw = undefined;
+        }
+      }
+      const rawObj = raw as { type?: unknown; value?: unknown } | undefined;
+      const value = (rawObj && typeof rawObj === "object" && !("type" in rawObj) && "value" in rawObj ? rawObj.value : rawObj) as AgentInteraction | undefined;
       const doResolve: Resolve = (payload) => {
-        void resolve(payload);
+        const result = resolve(payload);
+        // See resyncThreadMessages()'s doc comment. Confirmed via logging: resolve()'s own
+        // reported `newMessages` count is NOT a reliable signal that anything actually landed in
+        // agent.messages (the array it diffs against for that count never grows even when it
+        // reports 1+ new messages) - so always resync unconditionally after every resume rather
+        // than only when the count is suspiciously zero.
+        if (result && typeof (result as Promise<unknown>).then === "function") {
+          (result as Promise<unknown>)
+            .catch((error) => console.error("[InteractionRenderer] resolve() rejected:", error))
+            .finally(() => {
+              if (!agent) return;
+              resyncThreadMessages(agent.threadId).then((messages) => {
+                if (messages) agent.setMessages(messages as never);
+              });
+            });
+        } else if (agent) {
+          resyncThreadMessages(agent.threadId).then((messages) => {
+            if (messages) agent.setMessages(messages as never);
+          });
+        }
       };
 
       if (!value) return <></>;
       if (value.type === "approval") return <ApprovalInteraction value={value} resolve={doResolve} />;
       if (value.type === "question") return <QuestionInteraction value={value} resolve={doResolve} />;
-      return <PlanEditInteraction value={value} resolve={doResolve} />;
+      if (value.type === "plan_edit" && value.plan) return <PlanEditInteraction value={value} resolve={doResolve} />;
+      return <></>;
     },
   });
 

@@ -1,10 +1,6 @@
-import { createAgent } from "langchain";
-import { model } from "../llm.js";
-import { buildTools } from "./sharedTools.js";
-import { buildMemoryTools, composePreferenceContext } from "../memory/memoryTools.js";
-import { memoryService } from "../memory/memoryService.js";
-import { DEFAULT_TENANT_ID, wrapWithConversationMemory } from "./shared.js";
-
+// Reused verbatim by src/graph/researchGraph.ts (the AG-UI/LangGraph execution path) - the
+// legacy REST/SSE runResearchAgent() that used to live in this file has been removed; this
+// constant is the only thing left here.
 export const RESEARCH_SYSTEM_PROMPT = `You are a research assistant that investigates questions using the available tools and \
 remembered context before answering.
 
@@ -14,35 +10,3 @@ similar research tasks, and reuse a working approach instead of starting from sc
 - When you finish, give a clear, well-organized answer citing what you found, and call remember_fact for any \
 durable fact worth keeping for future questions (not for one-off findings).
 - Be explicit when you are uncertain or a source is missing rather than fabricating an answer.`;
-
-export async function runResearchAgent(
-  externalUserId: string,
-  messages: Array<{ role: "user" | "assistant"; content: string }>,
-) {
-  const mcpTools = await buildTools(externalUserId);
-  const tools = [...mcpTools, ...buildMemoryTools(DEFAULT_TENANT_ID, externalUserId)];
-  const agent = createAgent({ model, tools });
-
-  const sessionId = `${externalUserId}:research`;
-  const latestUserMessage = [...messages].reverse().find((m) => m.role === "user");
-  if (latestUserMessage) {
-    await memoryService.addMessage(DEFAULT_TENANT_ID, externalUserId, sessionId, "user", latestUserMessage.content);
-  }
-
-  const preferenceContext = await composePreferenceContext(DEFAULT_TENANT_ID, externalUserId);
-  const systemPrompt = preferenceContext ? `${RESEARCH_SYSTEM_PROMPT}\n\n${preferenceContext}` : RESEARCH_SYSTEM_PROMPT;
-
-  const stream = await agent.stream(
-    {
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...messages.map((m) => ({ role: m.role, content: m.content })),
-      ],
-    },
-    { streamMode: "messages" },
-  );
-
-  return wrapWithConversationMemory(stream, externalUserId, sessionId, latestUserMessage?.content, {
-    task: latestUserMessage?.content ?? "research task",
-  });
-}

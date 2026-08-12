@@ -8,7 +8,7 @@ import { claimOrVerifyThreadOwnership } from "./threadOwnership.js";
 
 const SESSION_COOKIE = "session";
 const LANGGRAPH_DEPLOYMENT_URL = process.env.LANGGRAPH_DEPLOYMENT_URL ?? "http://localhost:2024";
-const AGENT_GRAPH_IDS = ["clockwork", "research", "qna"] as const;
+const AGENT_GRAPH_IDS = ["assistant"] as const;
 
 function parseCookieHeader(header: string | null): Record<string, string> {
   if (!header) return {};

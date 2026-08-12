@@ -129,7 +129,11 @@ async function plannerNode(state: GraphState, config: RunnableConfig): Promise<P
   const task = latestUserMessage ? extractText(latestUserMessage.content) : "";
 
   try {
-    const structuredModel = createModel(400).withStructuredOutput(PLAN_SCHEMA);
+    // "langsmith:nostream", bound directly on the model (not just passed via invoke's config),
+    // excludes this internal planning call from the AG-UI message stream - without it, the raw
+    // structured-output JSON gets emitted as TEXT_MESSAGE_CONTENT and shows up as a garbled chat
+    // message to the user before the plan_edit interrupt's UI ever renders.
+    const structuredModel = createModel(400).withStructuredOutput(PLAN_SCHEMA).withConfig({ tags: ["langsmith:nostream"] });
     const result = (await structuredModel.invoke(
       [
         { role: "system", content: PLANNER_PROMPT },
@@ -214,7 +218,7 @@ async function clarifyStepNode(state: GraphState, config: RunnableConfig): Promi
   if (!step) return {};
 
   try {
-    const structuredModel = createModel(300).withStructuredOutput(CLARIFY_SCHEMA);
+    const structuredModel = createModel(300).withStructuredOutput(CLARIFY_SCHEMA).withConfig({ tags: ["langsmith:nostream"] });
     const result = (await structuredModel.invoke(
       [
         { role: "system", content: CLARIFY_PROMPT },

@@ -33,3 +33,29 @@ async function authRequest(action: "login" | "signup", username: string, passwor
 export async function logout(): Promise<void> {
   await fetch("/auth/logout", { method: "POST" });
 }
+
+export interface ThreadRecord {
+  threadId: string;
+  createdAt: string;
+  title?: string;
+}
+
+export async function getThreads(): Promise<ThreadRecord[]> {
+  const res = await fetch("/api/threads");
+  const data = await res.json();
+  return data.threads ?? [];
+}
+
+export async function createThread(): Promise<string> {
+  const res = await fetch("/api/threads", { method: "POST" });
+  const data = await res.json();
+  return data.threadId;
+}
+
+export async function renameThread(threadId: string, title: string): Promise<void> {
+  await fetch(`/api/threads/${threadId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+}

@@ -4,6 +4,7 @@ interface ThreadOwnerRecord {
   threadId: string;
   externalUserId: string;
   createdAt: string;
+  title?: string;
 }
 
 function threadOwnersCollection() {
@@ -30,4 +31,16 @@ export async function claimOrVerifyThreadOwnership(threadId: string, externalUse
     const existing = await threadOwnersCollection().findOne({ threadId });
     return existing?.externalUserId === externalUserId;
   }
+}
+
+export async function listThreadsForUser(externalUserId: string): Promise<ThreadOwnerRecord[]> {
+  return threadOwnersCollection()
+    .find({ externalUserId })
+    .sort({ createdAt: -1 })
+    .toArray();
+}
+
+export async function renameThread(threadId: string, externalUserId: string, title: string): Promise<boolean> {
+  const result = await threadOwnersCollection().updateOne({ threadId, externalUserId }, { $set: { title } });
+  return result.matchedCount > 0;
 }
