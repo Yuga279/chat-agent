@@ -6,6 +6,7 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage }
 import { model } from "../llm.js";
 import { buildTools } from "../agents/sharedTools.js";
 import { buildMemoryTools, composePreferenceContext } from "../memory/memoryTools.js";
+import { memoryService } from "../memory/memoryService.js";
 import { DEFAULT_TENANT_ID } from "../constants.js";
 import { ASSISTANT_SYSTEM_PROMPT } from "../assistantPrompt.js";
 import { ensureGraphReady } from "./simpleAgentGraph.js";
@@ -173,7 +174,35 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
     : undefined;
 
   const newMessages = await runReactLoop(state, config, externalUserId, focusNote);
+  await persistChatMemory(state, config, externalUserId, newMessages);
   return { messages: newMessages, plan: null };
+}
+
+/** Mirrors this turn's user message and final assistant reply into MongoDB (`conversation_messages`),
+ * in addition to LangGraph's own thread checkpointing - see MemoryService.addMessage. Best-effort:
+ * a failure here must never break the actual chat turn. */
+async function persistChatMemory(
+  state: GraphState,
+  config: RunnableConfig,
+  externalUserId: string,
+  newMessages: Array<AIMessage | ToolMessage>,
+): Promise<void> {
+  const sessionId = config.configurable?.thread_id as string | undefined;
+  if (!sessionId) return;
+
+  try {
+    const latestUserMessage = [...state.messages].reverse().find((m) => m.getType() === "human");
+    if (latestUserMessage) {
+      await memoryService.addMessage(DEFAULT_TENANT_ID, externalUserId, sessionId, "user", String(latestUserMessage.content));
+    }
+
+    const finalReply = [...newMessages].reverse().find((m) => m instanceof AIMessage && typeof m.content === "string" && m.content.length > 0);
+    if (finalReply) {
+      await memoryService.addMessage(DEFAULT_TENANT_ID, externalUserId, sessionId, "assistant", String(finalReply.content));
+    }
+  } catch (error) {
+    console.error("persistChatMemory failed (chat turn continues normally):", error);
+  }
 }
 
 function routeAfterPlanner(state: GraphState): "planReview" | "execute" {

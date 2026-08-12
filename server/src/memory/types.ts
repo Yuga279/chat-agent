@@ -23,6 +23,8 @@ export interface MemoryRecord {
   validTo: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Embedding of `content`, used for semantic recall. Null when no embedding provider is configured. */
+  embedding: number[] | null;
 }
 
 export interface ConversationMessageRecord {
@@ -46,6 +48,8 @@ export interface EpisodeRecord {
   toolsUsed: string;
   createdAt: string;
   importance: number;
+  /** Embedding of `task`, used for semantic similar-experience lookup. Null when unavailable. */
+  embedding: number[] | null;
 }
 
 /** A candidate fact pulled from a message, before it becomes a MemoryRecord. */

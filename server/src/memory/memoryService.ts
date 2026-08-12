@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { conversationMessagesCollection, episodesCollection, memoriesCollection } from "./collections.js";
 import { DefaultImportanceScorer } from "./importanceScorer.js";
 import { LlmMemoryExtractor } from "./classifier.js";
+import { cosineSimilarity, embedText } from "./embeddings.js";
 import type {
   ConversationMessageRecord,
   EpisodeRecord,
@@ -104,6 +105,7 @@ export class MemoryService {
       await memoriesCollection().updateOne({ id: existing.id }, { $set: { status: "superseded", validTo: now, updatedAt: now } });
     }
 
+    const content = `${input.subject} ${input.predicate} ${input.object}`;
     const record: MemoryRecord = {
       id: randomUUID(),
       tenantId: input.tenantId,
@@ -112,7 +114,7 @@ export class MemoryService {
       subject: input.subject,
       predicate: input.predicate,
       object: input.object,
-      content: `${input.subject} ${input.predicate} ${input.object}`,
+      content,
       source: input.source,
       confidence: input.confidence,
       importance: input.importance,
@@ -122,14 +124,35 @@ export class MemoryService {
       validTo: null,
       createdAt: now,
       updatedAt: now,
+      embedding: await embedText(content),
     };
 
     await memoriesCollection().insertOne(record);
     return record;
   }
 
-  /** Keyword recall over content, ranked by importance/confidence/recency. */
+  /**
+   * Recalls facts relevant to `query`. Ranks by embedding cosine similarity when a query
+   * embedding and at least one stored embedding are available; otherwise falls back to a
+   * keyword regex scan over `content` so recall still works without an embedding provider.
+   */
   async recall(tenantId: string, userId: string, query: string, limit = 5): Promise<MemoryRecord[]> {
+    const queryEmbedding = await embedText(query);
+
+    if (queryEmbedding) {
+      const candidates = await memoriesCollection()
+        .find({ tenantId, userId, status: "active", embedding: { $ne: null } }, NO_ID_PROJECTION)
+        .toArray();
+
+      if (candidates.length > 0) {
+        return candidates
+          .map((record) => ({ record, score: cosineSimilarity(queryEmbedding, record.embedding as number[]) }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit)
+          .map((x) => x.record);
+      }
+    }
+
     return memoriesCollection()
       .find(
         {
@@ -167,12 +190,34 @@ export class MemoryService {
 
   // ---- Episodic / experience memory ----
 
-  async recordEpisode(episode: Omit<EpisodeRecord, "id" | "createdAt">): Promise<void> {
-    const record: EpisodeRecord = { id: randomUUID(), createdAt: new Date().toISOString(), ...episode };
+  async recordEpisode(episode: Omit<EpisodeRecord, "id" | "createdAt" | "embedding">): Promise<void> {
+    const record: EpisodeRecord = {
+      id: randomUUID(),
+      createdAt: new Date().toISOString(),
+      ...episode,
+      embedding: await embedText(episode.task),
+    };
     await episodesCollection().insertOne(record);
   }
 
+  /** Same embedding-with-keyword-fallback approach as recall() above. */
   async findSimilarEpisodes(tenantId: string, userId: string, task: string, limit = 3): Promise<EpisodeRecord[]> {
+    const queryEmbedding = await embedText(task);
+
+    if (queryEmbedding) {
+      const candidates = await episodesCollection()
+        .find({ tenantId, userId, embedding: { $ne: null } }, NO_ID_PROJECTION)
+        .toArray();
+
+      if (candidates.length > 0) {
+        return candidates
+          .map((record) => ({ record, score: cosineSimilarity(queryEmbedding, record.embedding as number[]) }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit)
+          .map((x) => x.record);
+      }
+    }
+
     return episodesCollection()
       .find({ tenantId, userId, task: { $regex: escapeRegExp(task), $options: "i" } }, NO_ID_PROJECTION)
       .sort({ createdAt: -1 })
