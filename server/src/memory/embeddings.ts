@@ -1,6 +1,10 @@
 import { config } from "../config.js";
 
-const EMBEDDING_MODEL = "text-embedding-004";
+// "text-embedding-004" (the original model here) 404s against the current API - Gemini's
+// embedding models get deprecated/renamed over time the same way dated chat model ids do (see
+// CLAUDE.md's note on gemini-flash-lite-latest vs pinned dated ids). Confirmed working 2026-08-13
+// via `GET /v1beta/models?key=...` filtered to supportedGenerationMethods including embedContent.
+const EMBEDDING_MODEL = "gemini-embedding-001";
 
 /**
  * Embeds text via Gemini's embedContent endpoint. Returns null (never throws) when no
