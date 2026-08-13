@@ -74,8 +74,8 @@ export type GoalStatus = "proposed" | "active" | "done" | "abandoned";
 export type GoalStepStatus = "pending" | "done";
 
 export interface GoalStep {
-  description: string;
-  agent: "clockwork" | "research" | "qna";
+  title: string;
+  description?: string;
   status: GoalStepStatus;
 }
 
