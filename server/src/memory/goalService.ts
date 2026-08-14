@@ -15,6 +15,7 @@ export class GoalService {
   async proposeGoal(
     tenantId: string,
     userId: string,
+    threadId: string | null,
     title: string,
     steps: Array<{ title: string; description?: string }>,
   ): Promise<GoalRecord> {
@@ -23,6 +24,7 @@ export class GoalService {
       id: randomUUID(),
       tenantId,
       userId,
+      threadId,
       title,
       status: "proposed",
       steps: steps.map((s): GoalStep => ({ title: s.title, description: s.description, status: "pending" })),

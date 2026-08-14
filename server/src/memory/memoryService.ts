@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { conversationMessagesCollection, episodesCollection, semanticMemoriesCollection } from "./collections.js";
+import { conversationMessagesCollection, episodesCollection, semanticMemoriesCollection, toolExecutionsCollection } from "./collections.js";
 import { DefaultImportanceScorer } from "./importanceScorer.js";
 import { LlmMemoryExtractor } from "./classifier.js";
 import { cosineSimilarity, embedText } from "./embeddings.js";
@@ -10,9 +10,27 @@ import type {
   IMemoryExtractor,
   IMemoryImportanceScorer,
   SemanticMemoryRecord,
+  MemoryScope,
   MemorySource,
   MemoryType,
+  ToolExecutionRecord,
 } from "./types.js";
+
+/** Tool argument keys never persisted verbatim - a small, hand-maintained allow-list of what's
+ * NOT sensitive would be riskier (silently leaks a newly added field); redact-by-default and
+ * explicitly allow only what's known safe. */
+const SAFE_TOOL_ARG_KEYS = new Set(["query", "task", "projectId", "limit"]);
+
+function redactToolArguments(args: Record<string, unknown> | undefined | null): Record<string, unknown> | null {
+  if (!args) return null;
+  const redacted: Record<string, unknown> = {};
+  for (const key of Object.keys(args)) {
+    redacted[key] = SAFE_TOOL_ARG_KEYS.has(key) ? args[key] : "[redacted]";
+  }
+  return redacted;
+}
+
+const RESULT_SUMMARY_MAX_LENGTH = 500;
 
 const CONVERSATION_WINDOW = 20;
 const MIN_IMPORTANCE_TO_PERSIST = 0.5;
@@ -21,6 +39,7 @@ const NO_ID_PROJECTION = { projection: { _id: 0 } } as const;
 export interface RememberInput {
   tenantId: string;
   userId: string;
+  scope?: MemoryScope;
   type: MemoryType;
   subject: string;
   predicate: string;
@@ -46,6 +65,7 @@ export class MemoryService {
   async addMessage(
     tenantId: string,
     userId: string,
+    threadId: string | null,
     sessionId: string,
     role: "user" | "assistant",
     content: string,
@@ -54,6 +74,7 @@ export class MemoryService {
       id: randomUUID(),
       tenantId,
       userId,
+      threadId,
       sessionId,
       role,
       content,
@@ -85,6 +106,7 @@ export class MemoryService {
       {
         tenantId: input.tenantId,
         userId: input.userId,
+        scope: input.scope ?? "user",
         subject: input.subject,
         predicate: input.predicate,
         status: "active",
@@ -110,6 +132,7 @@ export class MemoryService {
       id: randomUUID(),
       tenantId: input.tenantId,
       userId: input.userId,
+      scope: input.scope ?? "user",
       type: input.type,
       subject: input.subject,
       predicate: input.predicate,
@@ -139,9 +162,17 @@ export class MemoryService {
   async recall(tenantId: string, userId: string, query: string, limit = 5): Promise<SemanticMemoryRecord[]> {
     const queryEmbedding = await embedText(query);
 
+    // Retrieval filter applied before any similarity ranking: tenant-scoped, and either this
+    // user's own memories or tenant-wide ones - never any other user's, and never client-supplied.
+    const scopeFilter = {
+      tenantId,
+      status: "active" as const,
+      $or: [{ scope: "user" as const, userId }, { scope: "tenant" as const }],
+    };
+
     if (queryEmbedding) {
       const candidates = await semanticMemoriesCollection()
-        .find({ tenantId, userId, status: "active", embedding: { $ne: null } }, NO_ID_PROJECTION)
+        .find({ ...scopeFilter, embedding: { $ne: null } }, NO_ID_PROJECTION)
         .toArray();
 
       if (candidates.length > 0) {
@@ -155,12 +186,7 @@ export class MemoryService {
 
     return semanticMemoriesCollection()
       .find(
-        {
-          tenantId,
-          userId,
-          status: "active",
-          content: { $regex: escapeRegExp(query), $options: "i" },
-        },
+        { ...scopeFilter, content: { $regex: escapeRegExp(query), $options: "i" } },
         NO_ID_PROJECTION,
       )
       .sort({ importance: -1, confidence: -1, updatedAt: -1 })
@@ -170,7 +196,11 @@ export class MemoryService {
 
   /** All active facts for a user, used to build compact context without a specific query. */
   async getActiveFacts(tenantId: string, userId: string, type?: MemoryType, limit = 20): Promise<SemanticMemoryRecord[]> {
-    const filter: Record<string, unknown> = { tenantId, userId, status: "active" };
+    const filter: Record<string, unknown> = {
+      tenantId,
+      status: "active",
+      $or: [{ scope: "user", userId }, { scope: "tenant" }],
+    };
     if (type) filter.type = type;
 
     return semanticMemoriesCollection().find(filter, NO_ID_PROJECTION).sort({ importance: -1 }).limit(limit).toArray();
@@ -190,7 +220,7 @@ export class MemoryService {
 
   // ---- Episodic / experience memory ----
 
-  async recordEpisode(episode: Omit<EpisodeRecord, "id" | "createdAt" | "embedding">): Promise<void> {
+  async recordEpisode(episode: Omit<EpisodeRecord, "id" | "createdAt" | "embedding">): Promise<EpisodeRecord> {
     const record: EpisodeRecord = {
       id: randomUUID(),
       createdAt: new Date().toISOString(),
@@ -198,6 +228,40 @@ export class MemoryService {
       embedding: await embedText(episode.task),
     };
     await episodesCollection().insertOne(record);
+    return record;
+  }
+
+  /** Detailed tool-call record, looked up by episodeId only when full arguments/results are
+   * needed - episodes themselves only carry a lightweight ToolExecutionSummary. */
+  async recordToolExecution(input: {
+    tenantId: string;
+    userId: string;
+    threadId: string | null;
+    sessionId: string | null;
+    episodeId: string;
+    toolName: string;
+    arguments: Record<string, unknown> | undefined;
+    result: unknown;
+    status: "success" | "error";
+    startedAt: string;
+    completedAt: string;
+  }): Promise<void> {
+    const resultText = typeof input.result === "string" ? input.result : JSON.stringify(input.result ?? "");
+    const record: ToolExecutionRecord = {
+      id: randomUUID(),
+      tenantId: input.tenantId,
+      userId: input.userId,
+      threadId: input.threadId,
+      sessionId: input.sessionId,
+      episodeId: input.episodeId,
+      toolName: input.toolName,
+      argumentsRedacted: redactToolArguments(input.arguments),
+      resultSummary: resultText.slice(0, RESULT_SUMMARY_MAX_LENGTH),
+      status: input.status,
+      startedAt: input.startedAt,
+      completedAt: input.completedAt,
+    };
+    await toolExecutionsCollection().insertOne(record);
   }
 
   /** Same embedding-with-keyword-fallback approach as recall() above. */
@@ -245,7 +309,7 @@ export class MemoryService {
           subject: fact.subject,
           predicate: fact.predicate,
           object: fact.object,
-          source: "conversation",
+          source: { type: "conversation", tenantId, userId, agent: "assistant" },
           confidence: fact.confidence,
           importance,
         }),

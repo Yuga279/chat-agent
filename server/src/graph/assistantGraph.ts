@@ -98,9 +98,25 @@ Respond with ONLY a JSON object (no markdown, no code fences, no commentary) mat
 {"isMultiStep": boolean, "title": string, "steps": [{"title": string, "description": string}]}
 "steps" must be [] when isMultiStep is false.`;
 
+interface ToolCallRecord {
+  toolName: string;
+  arguments: Record<string, unknown> | undefined;
+  result: unknown;
+  status: "success" | "error";
+  startedAt: string;
+  completedAt: string;
+}
+
+interface ReactLoopResult {
+  messages: Array<AIMessage | ToolMessage>;
+  toolCalls: ToolCallRecord[];
+}
+
 /** Runs the model-call/tool-execution loop; used both for a single-shot (non-plan) turn and for
- * executing an approved plan's steps in one combined pass. */
-async function runReactLoop(state: GraphState, config: RunnableConfig, externalUserId: string, focusNote?: string): Promise<Array<AIMessage | ToolMessage>> {
+ * executing an approved plan's steps in one combined pass. Also returns per-call detail
+ * (arguments/result/timing) for tool_executions - the episode summary alone is too coarse to be
+ * traceable independently. */
+async function runReactLoop(state: GraphState, config: RunnableConfig, externalUserId: string, focusNote?: string): Promise<ReactLoopResult> {
   const { tools, systemPrompt } = await resolveContext(externalUserId);
   const toolsByName = new Map(tools.map((t) => [t.name, t as { invoke: (input: unknown, config?: unknown) => Promise<unknown> }]));
   const modelWithTools = model.bindTools(tools);
@@ -109,6 +125,7 @@ async function runReactLoop(state: GraphState, config: RunnableConfig, externalU
   if (focusNote) messages.push(new HumanMessage(focusNote));
 
   const newMessages: Array<AIMessage | ToolMessage> = [];
+  const toolCalls: ToolCallRecord[] = [];
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const response = await modelWithTools.invoke(messages, config);
@@ -119,9 +136,20 @@ async function runReactLoop(state: GraphState, config: RunnableConfig, externalU
 
     for (const call of response.tool_calls) {
       const tool = toolsByName.get(call.name);
+      const startedAt = new Date().toISOString();
       const result: unknown = tool ? await tool.invoke(call.args, config) : `Unknown tool: ${call.name}`;
+      const completedAt = new Date().toISOString();
+      const resultText = typeof result === "string" ? result : JSON.stringify(result);
+      toolCalls.push({
+        toolName: call.name,
+        arguments: call.args as Record<string, unknown> | undefined,
+        result,
+        status: resultText.startsWith("Unknown tool:") || resultText.startsWith("NOT_LINKED::") ? "error" : "success",
+        startedAt,
+        completedAt,
+      });
       const toolMessage = new ToolMessage({
-        content: typeof result === "string" ? result : JSON.stringify(result),
+        content: resultText,
         tool_call_id: call.id ?? "",
         name: call.name,
       });
@@ -143,7 +171,7 @@ async function runReactLoop(state: GraphState, config: RunnableConfig, externalU
     );
   }
 
-  return newMessages;
+  return { messages: newMessages, toolCalls };
 }
 
 /** Looks up whether this user already has a durable goal (proposed - awaiting approval, or
@@ -179,7 +207,8 @@ async function plannerNode(state: GraphState, config: RunnableConfig): Promise<P
 
     if (!result.isMultiStep || result.steps.length < 2) return { plan: null, goalId: null };
 
-    const goal = await goalService.proposeGoal(DEFAULT_TENANT_ID, externalUserId, result.title, result.steps);
+    const threadId = (config.configurable?.thread_id as string | undefined) ?? null;
+    const goal = await goalService.proposeGoal(DEFAULT_TENANT_ID, externalUserId, threadId, result.title, result.steps);
     return { plan: goalToPlan(goal), goalId: goal.id };
   } catch (error) {
     console.error("Assistant plan generation failed, handling the request directly:", error);
@@ -226,12 +255,13 @@ async function planReviewNode(state: GraphState): Promise<Partial<GraphState>> {
  * `goalId` for the non-goal path and once the goal's last step completes. */
 async function executeNode(state: GraphState, config: RunnableConfig): Promise<Partial<GraphState>> {
   const externalUserId = requireExternalUserId(config);
+  const threadId = (config.configurable?.thread_id as string | undefined) ?? null;
 
   if (!state.goalId) {
-    const newMessages = await runReactLoop(state, config, externalUserId);
+    const { messages: newMessages, toolCalls } = await runReactLoop(state, config, externalUserId);
     appendNotLinkedButton(newMessages);
     await persistChatMemory(state, config, externalUserId, newMessages);
-    await recordEpisodeForRun(state, externalUserId, taskFromLatestUserMessage(state), newMessages);
+    await recordEpisodeForRun(externalUserId, threadId, taskFromLatestUserMessage(state), newMessages, toolCalls, null, null);
     return { messages: newMessages, plan: null, goalId: null };
   }
 
@@ -240,10 +270,10 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
   if (!goal || !currentStep) {
     // Nothing left to run (e.g. goal already completed by a concurrent turn) - fall back to a
     // plain single-shot reply rather than getting stuck.
-    const newMessages = await runReactLoop(state, config, externalUserId);
+    const { messages: newMessages, toolCalls } = await runReactLoop(state, config, externalUserId);
     appendNotLinkedButton(newMessages);
     await persistChatMemory(state, config, externalUserId, newMessages);
-    await recordEpisodeForRun(state, externalUserId, taskFromLatestUserMessage(state), newMessages);
+    await recordEpisodeForRun(externalUserId, threadId, taskFromLatestUserMessage(state), newMessages, toolCalls, null, null);
     return { messages: newMessages, plan: null, goalId: null };
   }
 
@@ -251,10 +281,10 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
   const stepTask = `${currentStep.title}${currentStep.description ? ` - ${currentStep.description}` : ""}`;
   const focusNote = `(Working on step ${stepNumber}/${goal.steps.length} of the goal "${goal.title}": ${stepTask})`;
 
-  const newMessages = await runReactLoop(state, config, externalUserId, focusNote);
+  const { messages: newMessages, toolCalls } = await runReactLoop(state, config, externalUserId, focusNote);
   appendNotLinkedButton(newMessages);
   await persistChatMemory(state, config, externalUserId, newMessages);
-  await recordEpisodeForRun(state, externalUserId, stepTask, newMessages);
+  await recordEpisodeForRun(externalUserId, threadId, stepTask, newMessages, toolCalls, goal.id, goal.currentStepIndex);
 
   const updatedGoal = await goalService.completeCurrentStep(goal.id);
   if (updatedGoal && updatedGoal.status === "done") {
@@ -275,16 +305,17 @@ async function persistChatMemory(
 ): Promise<void> {
   const sessionId = config.configurable?.thread_id as string | undefined;
   if (!sessionId) return;
+  const threadId = sessionId;
 
   try {
     const latestUserMessage = [...state.messages].reverse().find((m) => m.getType() === "human");
     if (latestUserMessage) {
-      await memoryService.addMessage(DEFAULT_TENANT_ID, externalUserId, sessionId, "user", String(latestUserMessage.content));
+      await memoryService.addMessage(DEFAULT_TENANT_ID, externalUserId, threadId, sessionId, "user", String(latestUserMessage.content));
     }
 
     const finalReply = [...newMessages].reverse().find((m) => m.getType() === "ai" && extractText(m.content).length > 0);
     if (finalReply) {
-      await memoryService.addMessage(DEFAULT_TENANT_ID, externalUserId, sessionId, "assistant", extractText(finalReply.content));
+      await memoryService.addMessage(DEFAULT_TENANT_ID, externalUserId, threadId, sessionId, "assistant", extractText(finalReply.content));
     }
   } catch (error) {
     console.error("persistChatMemory failed (chat turn continues normally):", error);
@@ -336,24 +367,22 @@ function taskFromLatestUserMessage(state: GraphState): string {
  * anything the model judges itself - good enough for "was there friction" without another model
  * call. Best-effort, same as persistChatMemory: never let a recording failure break the turn. */
 async function recordEpisodeForRun(
-  state: GraphState,
   externalUserId: string,
+  threadId: string | null,
   task: string,
   newMessages: Array<AIMessage | ToolMessage>,
+  toolCalls: ToolCallRecord[],
+  goalId: string | null,
+  stepIndex: number | null,
 ): Promise<void> {
   if (!task) return;
 
   try {
-    const toolsUsed = new Set<string>();
     let success = true;
     let failureReason: string | null = null;
 
     for (const message of newMessages) {
-      if (message.getType() === "ai") {
-        for (const call of (message as AIMessage).tool_calls ?? []) {
-          if (call.name) toolsUsed.add(call.name);
-        }
-      } else if (message.getType() === "tool" && typeof message.content === "string") {
+      if (message.getType() === "tool" && typeof message.content === "string") {
         if (message.content.startsWith("Unknown tool:") || message.content.startsWith("NOT_LINKED::")) {
           success = false;
           failureReason = message.content.slice(0, 300);
@@ -364,16 +393,36 @@ async function recordEpisodeForRun(
     const finalReply = [...newMessages].reverse().find((m) => m.getType() === "ai" && extractText(m.content).length > 0);
     const outcome = finalReply ? extractText(finalReply.content) : "";
 
-    await memoryService.recordEpisode({
+    const episode = await memoryService.recordEpisode({
       tenantId: DEFAULT_TENANT_ID,
       userId: externalUserId,
+      threadId,
+      sessionId: threadId,
+      goalId,
+      stepIndex,
       task,
+      actions: toolCalls.map((c) => ({ toolName: c.toolName, status: c.status, startedAt: c.startedAt })),
       outcome,
       success,
       failureReason,
-      toolsUsed: JSON.stringify([...toolsUsed]),
       importance: 0.4,
     });
+
+    for (const call of toolCalls) {
+      await memoryService.recordToolExecution({
+        tenantId: DEFAULT_TENANT_ID,
+        userId: externalUserId,
+        threadId,
+        sessionId: threadId,
+        episodeId: episode.id,
+        toolName: call.toolName,
+        arguments: call.arguments,
+        result: call.result,
+        status: call.status,
+        startedAt: call.startedAt,
+        completedAt: call.completedAt,
+      });
+    }
   } catch (error) {
     console.error("recordEpisodeForRun failed (chat turn continues normally):", error);
   }

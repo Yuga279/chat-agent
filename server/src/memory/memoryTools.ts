@@ -17,7 +17,7 @@ export function buildMemoryTools(tenantId: string, userId: string) {
         subject,
         predicate,
         object,
-        source: "agent",
+        source: { type: "explicit_tool_call", tenantId, userId, agent: "assistant" },
         confidence: confidence ?? 0.9,
         importance: 0.8,
       });
@@ -56,7 +56,7 @@ export function buildMemoryTools(tenantId: string, userId: string) {
       const episodes = await memoryService.findSimilarEpisodes(tenantId, userId, task);
       if (episodes.length === 0) return "No similar past experience found.";
       return episodes
-        .map((e) => `Task: ${e.task} | Outcome: ${e.outcome} | Success: ${e.success ? "yes" : "no"} | Tools: ${e.toolsUsed}`)
+        .map((e) => `Task: ${e.task} | Outcome: ${e.outcome} | Success: ${e.success ? "yes" : "no"} | Tools: ${e.actions.map((a) => a.toolName).join(", ")}`)
         .join("\n");
     },
     {
