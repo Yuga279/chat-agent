@@ -13,7 +13,7 @@ export function buildMemoryTools(tenantId: string, userId: string) {
       const record = await memoryService.remember({
         tenantId,
         userId,
-        type: "preference",
+        type: "semantic",
         subject,
         predicate,
         object,
@@ -90,7 +90,7 @@ export function buildMemoryTools(tenantId: string, userId: string) {
 
 /** Builds a compact, token-aware context block of the user's known preferences/facts. */
 export async function composePreferenceContext(tenantId: string, userId: string): Promise<string> {
-  const facts = await memoryService.getActiveFacts(tenantId, userId, "preference", 10);
+  const facts = await memoryService.getActiveFacts(tenantId, userId, "semantic", 10);
   if (facts.length === 0) return "";
 
   const lines = facts.map((f) => `- ${f.subject} ${f.predicate}: ${f.object}`);

@@ -5,11 +5,19 @@ import type { ExtractedFact, IMemoryExtractor } from "./types.js";
 const FACT_SCHEMA = z.object({
   facts: z.array(
     z.object({
-      memoryType: z.enum(["semantic", "preference", "episode", "ignore"]),
+      memoryType: z.enum(["semantic", "episode", "ignore"]),
       subject: z.string().describe("Who/what the fact is about, e.g. 'user'"),
       predicate: z.string().describe("The relationship, e.g. 'prefers_currency'"),
       object: z.string().describe("The value, e.g. 'INR'"),
       confidence: z.number().min(0).max(1),
+      importance: z
+        .number()
+        .min(0)
+        .max(1)
+        .describe(
+          "How useful this fact would be to recall in future, unrelated conversations - 0 for a minor detail, " +
+            "1 for something that should shape almost every future interaction (e.g. a hard constraint or core preference).",
+        ),
       reason: z.string(),
     }),
   ),
@@ -25,7 +33,8 @@ Do NOT extract:
 - Anything that is only true for this single task (that belongs in working memory, not here).
 
 If nothing durable is present, return an empty facts array. Use memoryType "ignore" for weak candidates \
-you decide not to keep.`;
+you decide not to keep. For every fact you do keep, also estimate its importance (0-1): how much it would \
+matter to recall in a future, unrelated conversation.`;
 
 /** LLM-backed classifier. Swappable via the IMemoryExtractor interface. */
 export class LlmMemoryExtractor implements IMemoryExtractor {

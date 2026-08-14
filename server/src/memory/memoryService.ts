@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { conversationMessagesCollection, episodesCollection, memoriesCollection } from "./collections.js";
+import { conversationMessagesCollection, episodesCollection, semanticMemoriesCollection } from "./collections.js";
 import { DefaultImportanceScorer } from "./importanceScorer.js";
 import { LlmMemoryExtractor } from "./classifier.js";
 import { cosineSimilarity, embedText } from "./embeddings.js";
@@ -9,7 +9,7 @@ import type {
   ExtractedFact,
   IMemoryExtractor,
   IMemoryImportanceScorer,
-  MemoryRecord,
+  SemanticMemoryRecord,
   MemorySource,
   MemoryType,
 } from "./types.js";
@@ -31,9 +31,9 @@ export interface RememberInput {
 }
 
 /**
- * Central memory service. Deliberately narrow: conversation history, semantic/preference
- * facts, and episodes. Each responsibility (scoring, extraction) is injected so it stays
- * replaceable, per the "no giant MemoryService" rule. Backed by MongoDB.
+ * Central memory service. Deliberately narrow: conversation history, semantic facts
+ * (including user preferences), and episodes. Each responsibility (scoring, extraction) is
+ * injected so it stays replaceable, per the "no giant MemoryService" rule. Backed by MongoDB.
  */
 export class MemoryService {
   constructor(
@@ -72,16 +72,16 @@ export class MemoryService {
     return rows.reverse();
   }
 
-  // ---- Semantic / preference memory ----
+  // ---- Semantic memory ----
 
   /**
    * Stores a fact, resolving conflicts against any existing active fact with the same
    * subject+predicate: the old one is marked superseded (never deleted) and the new one
    * records provenance via `supersedes`.
    */
-  async remember(input: RememberInput): Promise<MemoryRecord> {
+  async remember(input: RememberInput): Promise<SemanticMemoryRecord> {
     const now = new Date().toISOString();
-    const existing = await memoriesCollection().findOne(
+    const existing = await semanticMemoriesCollection().findOne(
       {
         tenantId: input.tenantId,
         userId: input.userId,
@@ -96,17 +96,17 @@ export class MemoryService {
       // Same fact restated: reinforce importance/confidence rather than duplicating.
       const confidence = Math.max(existing.confidence, input.confidence);
       const importance = Math.max(existing.importance, input.importance);
-      await memoriesCollection().updateOne({ id: existing.id }, { $set: { confidence, importance, updatedAt: now } });
+      await semanticMemoriesCollection().updateOne({ id: existing.id }, { $set: { confidence, importance, updatedAt: now } });
       return { ...existing, confidence, importance, updatedAt: now };
     }
 
     if (existing && input.confidence >= existing.confidence) {
       // Conflict, and the new fact is at least as trustworthy: supersede, keep history.
-      await memoriesCollection().updateOne({ id: existing.id }, { $set: { status: "superseded", validTo: now, updatedAt: now } });
+      await semanticMemoriesCollection().updateOne({ id: existing.id }, { $set: { status: "superseded", validTo: now, updatedAt: now } });
     }
 
     const content = `${input.subject} ${input.predicate} ${input.object}`;
-    const record: MemoryRecord = {
+    const record: SemanticMemoryRecord = {
       id: randomUUID(),
       tenantId: input.tenantId,
       userId: input.userId,
@@ -127,7 +127,7 @@ export class MemoryService {
       embedding: await embedText(content),
     };
 
-    await memoriesCollection().insertOne(record);
+    await semanticMemoriesCollection().insertOne(record);
     return record;
   }
 
@@ -136,11 +136,11 @@ export class MemoryService {
    * embedding and at least one stored embedding are available; otherwise falls back to a
    * keyword regex scan over `content` so recall still works without an embedding provider.
    */
-  async recall(tenantId: string, userId: string, query: string, limit = 5): Promise<MemoryRecord[]> {
+  async recall(tenantId: string, userId: string, query: string, limit = 5): Promise<SemanticMemoryRecord[]> {
     const queryEmbedding = await embedText(query);
 
     if (queryEmbedding) {
-      const candidates = await memoriesCollection()
+      const candidates = await semanticMemoriesCollection()
         .find({ tenantId, userId, status: "active", embedding: { $ne: null } }, NO_ID_PROJECTION)
         .toArray();
 
@@ -153,7 +153,7 @@ export class MemoryService {
       }
     }
 
-    return memoriesCollection()
+    return semanticMemoriesCollection()
       .find(
         {
           tenantId,
@@ -169,23 +169,23 @@ export class MemoryService {
   }
 
   /** All active facts for a user, used to build compact context without a specific query. */
-  async getActiveFacts(tenantId: string, userId: string, type?: MemoryType, limit = 20): Promise<MemoryRecord[]> {
+  async getActiveFacts(tenantId: string, userId: string, type?: MemoryType, limit = 20): Promise<SemanticMemoryRecord[]> {
     const filter: Record<string, unknown> = { tenantId, userId, status: "active" };
     if (type) filter.type = type;
 
-    return memoriesCollection().find(filter, NO_ID_PROJECTION).sort({ importance: -1 }).limit(limit).toArray();
+    return semanticMemoriesCollection().find(filter, NO_ID_PROJECTION).sort({ importance: -1 }).limit(limit).toArray();
   }
 
   /** Full history (active + superseded) for a subject+predicate, oldest first. */
-  async getTimeline(tenantId: string, userId: string, subject: string, predicate: string): Promise<MemoryRecord[]> {
-    return memoriesCollection()
+  async getTimeline(tenantId: string, userId: string, subject: string, predicate: string): Promise<SemanticMemoryRecord[]> {
+    return semanticMemoriesCollection()
       .find({ tenantId, userId, subject, predicate }, NO_ID_PROJECTION)
       .sort({ validFrom: 1 })
       .toArray();
   }
 
   async forget(id: string): Promise<void> {
-    await memoriesCollection().updateOne({ id }, { $set: { status: "deleted", updatedAt: new Date().toISOString() } });
+    await semanticMemoriesCollection().updateOne({ id }, { $set: { status: "deleted", updatedAt: new Date().toISOString() } });
   }
 
   // ---- Episodic / experience memory ----
@@ -227,14 +227,14 @@ export class MemoryService {
 
   // ---- Post-task extraction: classify a message and persist anything durable ----
 
-  async extractAndPersist(tenantId: string, userId: string, message: string): Promise<MemoryRecord[]> {
+  async extractAndPersist(tenantId: string, userId: string, message: string): Promise<SemanticMemoryRecord[]> {
     const facts = (await this.extractor.extract(message)).filter(
       (f): f is ExtractedFact & { memoryType: MemoryType } => f.memoryType !== "ignore",
     );
-    const persisted: MemoryRecord[] = [];
+    const persisted: SemanticMemoryRecord[] = [];
 
     for (const fact of facts) {
-      const importance = this.scorer.score(fact, { explicitStatement: true });
+      const importance = this.scorer.score(fact);
       if (importance < MIN_IMPORTANCE_TO_PERSIST) continue;
 
       persisted.push(

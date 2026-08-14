@@ -1,11 +1,11 @@
-export type MemoryType = "semantic" | "preference" | "episode";
+export type MemoryType = "semantic" | "episode";
 
 export type MemoryStatus = "active" | "superseded" | "archived" | "deleted";
 
 export type MemorySource = "user" | "conversation" | "agent" | "system";
 
-/** A durable fact/preference/episode, scoped to a user (tenant support left as a column for future multi-tenant use). */
-export interface MemoryRecord {
+/** A durable semantic-memory fact (including user preferences), scoped to a user (tenant support left as a column for future multi-tenant use). */
+export interface SemanticMemoryRecord {
   id: string;
   tenantId: string;
   userId: string;
@@ -52,18 +52,20 @@ export interface EpisodeRecord {
   embedding: number[] | null;
 }
 
-/** A candidate fact pulled from a message, before it becomes a MemoryRecord. */
+/** A candidate fact pulled from a message, before it becomes a SemanticMemoryRecord. */
 export interface ExtractedFact {
   memoryType: MemoryType | "ignore";
   subject: string;
   predicate: string;
   object: string;
   confidence: number;
+  /** The model's own estimate of how useful/durable this fact is for future conversations, 0-1. */
+  importance: number;
   reason: string;
 }
 
 export interface IMemoryImportanceScorer {
-  score(fact: ExtractedFact, opts: { explicitStatement: boolean }): number;
+  score(fact: ExtractedFact): number;
 }
 
 export interface IMemoryExtractor {
