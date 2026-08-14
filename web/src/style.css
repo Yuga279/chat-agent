@@ -82,6 +82,97 @@ header button {
   cursor: pointer;
 }
 
+header div {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-panel {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  width: 320px;
+  max-width: 90vw;
+}
+
+.modal-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.modal-panel__header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.modal-panel__close {
+  border: none;
+  background: none;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  color: #6b7280;
+}
+
+.modal-panel__body {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.modal-panel__body h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.modal-panel__body button {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #2563eb;
+  border-radius: 4px;
+  background: #2563eb;
+  color: white;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.modal-panel__refresh {
+  background: white !important;
+  color: #2563eb !important;
+}
+
+.modal-panel__danger {
+  background: white !important;
+  color: #dc2626 !important;
+  border-color: #dc2626 !important;
+}
+
+.system1-status {
+  margin: 0;
+  font-weight: 600;
+}
+
+.system1-status--connected {
+  color: #16a34a;
+}
+
+.system1-status--disconnected {
+  color: #dc2626;
+}
+
 .agent-tabs {
   display: flex;
   gap: 0.25rem;
@@ -179,6 +270,22 @@ header button {
 .research-chat {
   flex: 1;
   min-height: 0;
+}
+
+.research-chat a[href*="/oauth/link"] {
+  display: inline-block;
+  margin-top: 0.4rem;
+  padding: 0.5rem 0.9rem;
+  background: #2563eb;
+  color: white;
+  border-radius: 4px;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.research-chat a[href*="/oauth/link"]:hover {
+  background: #1d4ed8;
 }
 
 .research-plan {

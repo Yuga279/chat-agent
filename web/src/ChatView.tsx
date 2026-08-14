@@ -10,6 +10,8 @@ import "@copilotkit/react-core/v2/styles.css";
 import { getThreads, createThread, logout, type ThreadRecord } from "./api.js";
 import ThreadPanel from "./ThreadPanel.js";
 import InteractionRenderer from "./InteractionRenderer.js";
+import RunResyncGuard from "./RunResyncGuard.js";
+import ProfileModal from "./ProfileModal.js";
 import { resyncThreadMessages } from "./threadHistory.js";
 
 const AGENT_ID = "assistant";
@@ -56,6 +58,7 @@ function ThreadHistoryLoader({ threadId }: { threadId: string }) {
 export default function ChatView({ username, onLoggedOut }: { username: string; onLoggedOut: () => void }) {
   const [threads, setThreads] = useState<ThreadRecord[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const [showProfile, setShowProfile] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -86,13 +89,29 @@ export default function ChatView({ username, onLoggedOut }: { username: string; 
     setThreads((prev) => prev.map((t) => (t.threadId === renamedThreadId ? { ...t, title } : t)));
   }
 
+  // The "connect System1" link CopilotChat renders from markdown is a plain <a> that would
+  // otherwise navigate the whole SPA away to the external IdP - intercept it via delegation
+  // (works regardless of when/how the markdown renderer mounts the anchor) and open it in a new
+  // tab instead, matching the button styling in style.css.
+  function handleChatAreaClick(e: React.MouseEvent<HTMLDivElement>) {
+    const anchor = (e.target as HTMLElement).closest("a");
+    if (anchor && anchor.href.includes("/oauth/link")) {
+      e.preventDefault();
+      window.open(anchor.href, "_blank", "noopener");
+    }
+  }
+
   return (
     <div className="view">
       <header>
         <span>{username}</span>
-        <button onClick={handleLogout}>Log out</button>
+        <div>
+          <button onClick={() => setShowProfile(true)}>Profile</button>
+          <button onClick={handleLogout}>Log out</button>
+        </div>
       </header>
-      <div className="chat-layout">
+      {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
+      <div className="chat-layout" onClick={handleChatAreaClick}>
         <ThreadPanel
           threads={threads}
           activeThreadId={threadId}
@@ -108,6 +127,7 @@ export default function ChatView({ username, onLoggedOut }: { username: string; 
             <CopilotChatConfigurationProvider agentId={AGENT_ID} threadId={threadId}>
               <ThreadHistoryLoader threadId={threadId} />
               <ChatSuggestions />
+              <RunResyncGuard />
               <InteractionRenderer />
               <CopilotChat className="research-chat" />
             </CopilotChatConfigurationProvider>

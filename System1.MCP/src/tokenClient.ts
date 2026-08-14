@@ -22,6 +22,13 @@ export class NotLinkedError extends Error {
 
 const accessTokenCache = new Map<string, CachedToken>();
 
+/** Drops any cached access token for this user - must be called alongside tokenStore's unlink()
+ * or a still-valid cached token keeps working until it naturally expires, even though the
+ * refresh token backing it is gone. */
+export function clearAccessTokenCache(externalUserId: string): void {
+  accessTokenCache.delete(externalUserId);
+}
+
 class TokenRequestError extends Error {
   constructor(public readonly status: number, public readonly body: string) {
     super(`Token request failed (${status}): ${body}`);

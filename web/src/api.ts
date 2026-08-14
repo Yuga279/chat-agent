@@ -59,3 +59,19 @@ export async function renameThread(threadId: string, title: string): Promise<voi
     body: JSON.stringify({ title }),
   });
 }
+
+export interface System1Status {
+  linked: boolean;
+  linkUrl: string;
+}
+
+export async function getSystem1Status(): Promise<System1Status> {
+  const res = await fetch("/api/system1/status");
+  if (!res.ok) throw new Error("Failed to fetch System1 status");
+  return res.json();
+}
+
+export async function disconnectSystem1(): Promise<void> {
+  const res = await fetch("/api/system1/disconnect", { method: "POST" });
+  if (!res.ok) throw new Error("Failed to disconnect System1 account");
+}

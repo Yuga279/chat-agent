@@ -29,7 +29,13 @@ export async function buildTools(externalUserId: string) {
         }
 
         if (isNotLinkedResult(result)) {
-          return `This user hasn't linked their System1 account yet. Tell them to connect it here: ${result.linkUrl}`;
+          // Fixed, parseable sentinel (not free prose) so assistantGraph.ts's extractNotLinkedUrl
+          // can pull the URL out exactly - the model is told not to repeat it itself so the
+          // connect button rendered in chat always uses this canonical link, not a paraphrase.
+          return (
+            `NOT_LINKED::${result.linkUrl}::Tell the user they need to connect their System1 account before ` +
+            "this will work. Do not include any URL yourself - a connect button will be shown automatically."
+          );
         }
 
         return JSON.stringify(result);

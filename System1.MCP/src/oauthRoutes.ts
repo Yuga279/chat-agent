@@ -1,8 +1,8 @@
 import type { Express, Request, Response } from "express";
 import { config } from "./config.js";
 import { createPendingLink, consumePendingLink } from "./pkce.js";
-import { exchangeAuthorizationCode } from "./tokenClient.js";
-import { saveRefreshToken } from "./tokenStore.js";
+import { clearAccessTokenCache, exchangeAuthorizationCode } from "./tokenClient.js";
+import { isLinked, saveRefreshToken, unlink } from "./tokenStore.js";
 
 export function registerOAuthRoutes(app: Express): void {
   app.get("/oauth/link", (req: Request, res: Response) => {
@@ -27,6 +27,32 @@ export function registerOAuthRoutes(app: Express): void {
     authorizeUrl.searchParams.set("code_challenge_method", "S256");
 
     res.redirect(authorizeUrl.toString());
+  });
+
+  app.get("/oauth/status", (req: Request, res: Response) => {
+    const rawExternalUserId = typeof req.query.externalUserId === "string" ? req.query.externalUserId : undefined;
+    const externalUserId = rawExternalUserId?.replace(/[).,;:!?]+$/, "");
+    if (!externalUserId) {
+      res.status(400).json({ error: "Missing required query parameter: externalUserId" });
+      return;
+    }
+
+    res.status(200).json({ externalUserId, linked: isLinked(externalUserId) });
+  });
+
+  app.post("/oauth/unlink", (req: Request, res: Response) => {
+    // Query param, not a JSON body, matching the other routes here - no body-parsing middleware
+    // is assumed to be mounted on this Express app.
+    const rawExternalUserId = typeof req.query.externalUserId === "string" ? req.query.externalUserId : undefined;
+    const externalUserId = rawExternalUserId?.replace(/[).,;:!?]+$/, "");
+    if (!externalUserId) {
+      res.status(400).json({ error: "Missing required query parameter: externalUserId" });
+      return;
+    }
+
+    unlink(externalUserId);
+    clearAccessTokenCache(externalUserId);
+    res.status(200).json({ externalUserId, linked: false });
   });
 
   app.get("/oauth/callback", async (req: Request, res: Response) => {

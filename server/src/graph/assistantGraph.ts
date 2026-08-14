@@ -130,6 +130,19 @@ async function runReactLoop(state: GraphState, config: RunnableConfig, externalU
     }
   }
 
+  // If the loop exhausted MAX_TOOL_ITERATIONS while the model was still issuing tool calls (e.g.
+  // retrying after repeated tool failures), the last pushed message is an AIMessage with only
+  // tool_calls and no text - that renders as nothing in the UI. Give the user something visible
+  // rather than a silent turn.
+  const lastMessage = newMessages[newMessages.length - 1];
+  if (!lastMessage || (lastMessage.getType() === "ai" && extractText(lastMessage.content).length === 0)) {
+    newMessages.push(
+      new AIMessage(
+        "Sorry, I wasn't able to finish that after a few attempts. Please try again in a moment.",
+      ),
+    );
+  }
+
   return newMessages;
 }
 
@@ -216,6 +229,7 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
 
   if (!state.goalId) {
     const newMessages = await runReactLoop(state, config, externalUserId);
+    appendNotLinkedButton(newMessages);
     await persistChatMemory(state, config, externalUserId, newMessages);
     await recordEpisodeForRun(state, externalUserId, taskFromLatestUserMessage(state), newMessages);
     return { messages: newMessages, plan: null, goalId: null };
@@ -227,6 +241,7 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
     // Nothing left to run (e.g. goal already completed by a concurrent turn) - fall back to a
     // plain single-shot reply rather than getting stuck.
     const newMessages = await runReactLoop(state, config, externalUserId);
+    appendNotLinkedButton(newMessages);
     await persistChatMemory(state, config, externalUserId, newMessages);
     await recordEpisodeForRun(state, externalUserId, taskFromLatestUserMessage(state), newMessages);
     return { messages: newMessages, plan: null, goalId: null };
@@ -237,6 +252,7 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
   const focusNote = `(Working on step ${stepNumber}/${goal.steps.length} of the goal "${goal.title}": ${stepTask})`;
 
   const newMessages = await runReactLoop(state, config, externalUserId, focusNote);
+  appendNotLinkedButton(newMessages);
   await persistChatMemory(state, config, externalUserId, newMessages);
   await recordEpisodeForRun(state, externalUserId, stepTask, newMessages);
 
@@ -275,6 +291,40 @@ async function persistChatMemory(
   }
 }
 
+/** Pulls the canonical link URL out of a NOT_LINKED:: sentinel ToolMessage (see sharedTools.ts),
+ * so the connect button always uses the real URL regardless of how the model paraphrased it. */
+function extractNotLinkedUrl(newMessages: Array<AIMessage | ToolMessage>): string | null {
+  for (const message of newMessages) {
+    if (message.getType() !== "tool" || typeof message.content !== "string") continue;
+    const match = message.content.match(/^NOT_LINKED::(\S+)::/);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+/** Deterministically appends a fixed-format connect link to the final assistant reply when a
+ * not-linked tool result was seen this turn, so chat can reliably style/intercept it as a button
+ * (web/src/style.css, ChatView.tsx) instead of depending on the model to relay the URL verbatim. */
+function appendNotLinkedButton(newMessages: Array<AIMessage | ToolMessage>): void {
+  const linkUrl = extractNotLinkedUrl(newMessages);
+  if (!linkUrl) return;
+
+  const finalAi = [...newMessages].reverse().find((m): m is AIMessage => m.getType() === "ai");
+  if (!finalAi) return;
+
+  // A weak model can echo the raw URL itself despite being told not to, or a retried tool call
+  // can otherwise cause this to run against text that already mentions the link - strip any
+  // existing occurrence of the URL (bare, or already wrapped in the canonical markdown link)
+  // before appending, so the button can never render twice.
+  const escapedUrl = linkUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const withoutExistingMentions = extractText(finalAi.content)
+    .replace(new RegExp(`\\[[^\\]]*\\]\\(${escapedUrl}\\)`, "g"), "")
+    .replace(new RegExp(escapedUrl, "g"), "")
+    .trim();
+
+  finalAi.content = `${withoutExistingMentions}\n\n[Connect your System1 account](${linkUrl})`;
+}
+
 function taskFromLatestUserMessage(state: GraphState): string {
   const latestUserMessage = [...state.messages].reverse().find((m) => m.getType() === "human");
   return latestUserMessage ? String(latestUserMessage.content) : "";
@@ -304,7 +354,7 @@ async function recordEpisodeForRun(
           if (call.name) toolsUsed.add(call.name);
         }
       } else if (message.getType() === "tool" && typeof message.content === "string") {
-        if (message.content.startsWith("Unknown tool:") || message.content.includes("hasn't linked their System1 account")) {
+        if (message.content.startsWith("Unknown tool:") || message.content.startsWith("NOT_LINKED::")) {
           success = false;
           failureReason = message.content.slice(0, 300);
         }

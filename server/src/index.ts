@@ -12,6 +12,7 @@ import { buildCopilotAgents } from "./copilotRuntime.js";
 import { ensureThreadOwnershipIndexes } from "./threadOwnership.js";
 import { registerThreadResyncRoute } from "./threadResync.js";
 import { registerThreadsRoute } from "./threads.js";
+import { registerSystem1StatusRoute } from "./system1Status.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const webDir = path.resolve(__dirname, "../../web/dist");
@@ -23,13 +24,17 @@ async function main() {
   console.log(`Connected to MongoDB (${config.mongoUri}${config.mongoDbName})`);
 
   const app = express();
-  app.use(express.json());
+  // Default is 100kb - CopilotKit's agent-run requests post the full growing message history
+  // each turn (tool call args/results accumulate across a thread), which exceeds that on any
+  // conversation of nontrivial length.
+  app.use(express.json({ limit: "10mb" }));
   app.use(cookieParser());
   app.use(express.static(webDir));
 
   registerAuthRoutes(app);
   registerThreadResyncRoute(app);
   registerThreadsRoute(app);
+  registerSystem1StatusRoute(app);
 
   const copilotRuntime = new CopilotRuntime({ agents: buildCopilotAgents });
   app.use(
