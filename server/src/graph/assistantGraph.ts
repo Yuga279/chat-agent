@@ -5,6 +5,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { model } from "../llm.js";
 import { buildTools } from "../agents/sharedTools.js";
+import { buildWebSearchTool } from "../agents/webSearchTool.js";
 import { buildMemoryTools, composePreferenceContext } from "../memory/memoryTools.js";
 import { goalService } from "../memory/goalService.js";
 import type { GoalRecord } from "../memory/types.js";
@@ -67,7 +68,7 @@ function requireExternalUserId(config: RunnableConfig): string {
 async function resolveContext(externalUserId: string) {
   await ensureGraphReady();
   const mcpTools = await buildTools(externalUserId);
-  const tools = [...mcpTools, ...buildMemoryTools(DEFAULT_TENANT_ID, externalUserId)];
+  const tools = [...mcpTools, buildWebSearchTool(), ...buildMemoryTools(DEFAULT_TENANT_ID, externalUserId)];
   const preferenceContext = await composePreferenceContext(DEFAULT_TENANT_ID, externalUserId);
   const systemPrompt = preferenceContext ? `${ASSISTANT_SYSTEM_PROMPT}\n\n${preferenceContext}` : ASSISTANT_SYSTEM_PROMPT;
   return { tools, systemPrompt };
@@ -78,7 +79,7 @@ const PLAN_SCHEMA = z.object({
   title: z.string(),
   steps: z
     .array(z.object({ title: z.string(), description: z.string().optional() }))
-    .max(6)
+    .max(10)
     .describe("Only meaningful when isMultiStep is true"),
 });
 
@@ -92,8 +93,14 @@ open-ended research question that needs several sub-investigations). A single qu
 stop/delete one time entry, one lookup), or a short follow-up is NOT multi-step, even if it takes a couple tool \
 calls to answer - set isMultiStep=false and leave steps empty; you'll go straight to handling it.
 
-When isMultiStep is true, give the plan a short title and list 2-6 ordered, concrete, user-facing steps - never \
-expose internal reasoning, only the observable steps.
+When isMultiStep is true, give the plan a short title and list 2-10 ordered, concrete, user-facing steps - never \
+expose internal reasoning, only the observable steps. For open-ended research/investigation requests (anything \
+you'd need web_search or several rounds of tool calls to answer thoroughly), plan deeper rather than shallower: \
+break the topic into distinct sub-questions or angles (e.g. background/definitions, current state, comparison of \
+options, tradeoffs, a synthesis/recommendation step) instead of one vague "research X" step, and give each step a \
+one-sentence description of what specifically it should establish so the step is actionable on its own, not just \
+a restated title. Keep steps this granular only when the request is genuinely broad - a request that's naturally \
+a single or two-step lookup should still stay short.
 
 Respond with ONLY a JSON object (no markdown, no code fences, no commentary) matching exactly this shape:
 {"isMultiStep": boolean, "title": string, "steps": [{"title": string, "description": string}]}

@@ -12,9 +12,9 @@ to supply a value for an optional tool argument - omit it and let the tool's own
 clarifying question when a *required* argument is missing and can't be inferred from the conversation.
 - If the user asks an open-ended question that needs investigation or synthesis (not a simple fact recall), \
 check memory first (recall_memory, get_similar_experiences) for relevant prior facts or past approaches, reuse \
-a working approach when one exists, and use whatever data tools are relevant to gather current information \
-rather than guessing. Be explicit when you are uncertain or a source is missing rather than fabricating an \
-answer.
+a working approach when one exists, then use web_search for anything current, factual, or outside your own \
+knowledge - don't guess or rely on stale training knowledge when a quick search would confirm it. Be explicit \
+when you are uncertain or a source is missing rather than fabricating an answer.
 - If the user asks a direct question answerable from general knowledge or what's already remembered about \
 them, just answer it - don't investigate or take action for something that doesn't need it.
 - If you already called a tool this turn and it returned "not_linked", do NOT call it again - go straight to \

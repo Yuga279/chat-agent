@@ -5,6 +5,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { model, createModel } from "../llm.js";
 import { buildTools } from "../agents/sharedTools.js";
+import { buildWebSearchTool } from "../agents/webSearchTool.js";
 import { buildMemoryTools, composePreferenceContext } from "../memory/memoryTools.js";
 import { DEFAULT_TENANT_ID } from "../constants.js";
 import { RESEARCH_SYSTEM_PROMPT } from "../agents/researchAgent.js";
@@ -51,7 +52,7 @@ function ensureReady(): Promise<void> {
 async function resolveContext(externalUserId: string) {
   await ensureReady();
   const mcpTools = await buildTools(externalUserId);
-  const tools = [...mcpTools, ...buildMemoryTools(DEFAULT_TENANT_ID, externalUserId)];
+  const tools = [...mcpTools, buildWebSearchTool(), ...buildMemoryTools(DEFAULT_TENANT_ID, externalUserId)];
   const preferenceContext = await composePreferenceContext(DEFAULT_TENANT_ID, externalUserId);
   const systemPrompt = preferenceContext ? `${RESEARCH_SYSTEM_PROMPT}\n\n${preferenceContext}` : RESEARCH_SYSTEM_PROMPT;
   return { tools, systemPrompt };
@@ -115,13 +116,16 @@ const PLAN_SCHEMA = z.object({
       }),
     )
     .min(2)
-    .max(8),
+    .max(10),
 });
 
 const PLANNER_PROMPT = `You are planning a research task before any investigation happens. Break the user's \
-request into 2-8 ordered, concrete steps a research agent will carry out (e.g. "Identify major approaches", \
-"Survey recent developments", "Compare tradeoffs", "Draft final report"). Titles are short and user-facing - \
-never expose internal reasoning or chain-of-thought, only the observable steps.`;
+request into 2-10 ordered, concrete steps a research agent (with a web_search tool) will carry out. Prefer \
+depth over a single vague "research X" step: split the topic into distinct sub-questions or angles (e.g. \
+background/definitions, current state, comparison of options, tradeoffs, a synthesis/recommendation step), and \
+give each step a one-sentence description of what specifically it should establish so it's actionable on its \
+own. Titles are short and user-facing - never expose internal reasoning or chain-of-thought, only the \
+observable steps.`;
 
 /** Generates the plan the UI displays, once per thread. */
 async function plannerNode(state: GraphState, config: RunnableConfig): Promise<Partial<GraphState>> {
