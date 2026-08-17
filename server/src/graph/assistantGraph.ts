@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Annotation, StateGraph, MessagesAnnotation, START, END, interrupt } from "@langchain/langgraph";
 import type { RunnableConfig } from "@langchain/core/runnables";
-import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, SystemMessage, ToolMessage, trimMessages, type BaseMessage } from "@langchain/core/messages";
 import { model } from "../llm.js";
 import { buildTools } from "../agents/sharedTools.js";
 import { buildWebSearchTool } from "../agents/webSearchTool.js";
@@ -20,6 +20,35 @@ import { appendNotLinkedButton } from "./notLinkedButton.js";
 import { persistChatMemory, recordEpisodeForRun, taskFromLatestUserMessage, type ToolCallRecord } from "./executePersistence.js";
 
 const MAX_TOOL_ITERATIONS = 6;
+
+// LangGraph's thread checkpointing keeps every message for the life of a thread, and nothing
+// upstream of runReactLoop ever shrinks it - without this, a long-running thread eventually
+// exceeds the model's input context window (hits sooner on smaller-context OpenRouter models
+// than on Gemini's 1M-token window, but unbounded growth gets there on any provider eventually).
+// Budget is deliberately well under a typical provider window, not just under the largest one -
+// this stays a no-op days into a normal conversation and only trims once history actually grows
+// large, on any configured provider.
+const MAX_HISTORY_TOKENS = 8000;
+
+/**
+ * Drops the oldest messages once prior history exceeds MAX_HISTORY_TOKENS, keeping the most
+ * recent ones (the system prompt is added separately by the caller and is never part of this).
+ * `startOn: "human"` guarantees the kept slice starts at a clean human-turn boundary rather than
+ * mid-way through a tool-call/tool-result exchange - trimming to just after an AIMessage with
+ * pending tool_calls but before its ToolMessage would send the model a dangling tool call with no
+ * result, which most providers reject outright.
+ */
+async function trimHistory(messages: BaseMessage[]): Promise<BaseMessage[]> {
+  if (messages.length === 0) return messages;
+  return trimMessages(messages, {
+    maxTokens: MAX_HISTORY_TOKENS,
+    strategy: "last",
+    tokenCounter: model,
+    startOn: "human",
+    includeSystem: false,
+    allowPartial: false,
+  });
+}
 
 function goalToPlan(goal: GoalRecord): ResearchPlan {
   return {
@@ -120,7 +149,8 @@ async function runReactLoop(state: GraphState, config: RunnableConfig, externalU
   const toolsByName = new Map(tools.map((t) => [t.name, t as { invoke: (input: unknown, config?: unknown) => Promise<unknown> }]));
   const modelWithTools = model.bindTools(tools);
 
-  let messages: BaseMessage[] = [new SystemMessage(systemPrompt), ...state.messages];
+  const trimmedHistory = await trimHistory(state.messages);
+  let messages: BaseMessage[] = [new SystemMessage(systemPrompt), ...trimmedHistory];
   if (focusNote) messages.push(new HumanMessage(focusNote));
 
   const newMessages: Array<AIMessage | ToolMessage> = [];
