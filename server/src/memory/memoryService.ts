@@ -93,6 +93,31 @@ export class MemoryService {
     return rows.reverse();
   }
 
+  /**
+   * Cross-thread search over this user's own message history, scoped by userId (not sessionId/
+   * threadId) so it reaches every thread they've ever used - unlike findSimilarEpisodes(), which
+   * only sees a distilled per-run summary, this returns the actual message content. No embedding
+   * infra exists for conversation_messages, so this is a case-insensitive substring match against
+   * `content`; good enough for "did I ever ask about X" but not a fuzzy paraphrase match.
+   */
+  async searchConversations(
+    tenantId: string,
+    userId: string,
+    query: string,
+    limit = 10,
+  ): Promise<ConversationMessageRecord[]> {
+    const escaped = query.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (!escaped) return [];
+
+    const rows = await conversationMessagesCollection()
+      .find({ tenantId, userId, content: { $regex: escaped, $options: "i" } }, NO_ID_PROJECTION)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .toArray();
+
+    return rows;
+  }
+
   // ---- Semantic memory ----
 
   /**

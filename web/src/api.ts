@@ -60,6 +60,14 @@ export async function renameThread(threadId: string, title: string): Promise<voi
   });
 }
 
+export async function deleteThread(threadId: string): Promise<void> {
+  const res = await fetch(`/api/threads/${threadId}`, { method: "DELETE" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error ?? "Failed to delete thread");
+  }
+}
+
 export interface System1Status {
   linked: boolean;
   linkUrl: string;

@@ -234,8 +234,14 @@ header div {
   gap: 0.15rem;
 }
 
+.thread-panel__item {
+  display: flex;
+  align-items: center;
+}
+
 .thread-panel__item-label {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   text-align: left;
   padding: 0.5rem 0.6rem;
   border: none;
@@ -257,6 +263,24 @@ header div {
   background: #e0e7ff;
   color: #2563eb;
   font-weight: 600;
+}
+
+.thread-panel__item-delete {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: #9aa0a6;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.thread-panel__item-delete:hover {
+  background: #fee2e2;
+  color: #dc2626;
 }
 
 .thread-panel__rename-input {

@@ -66,6 +66,29 @@ export function buildMemoryTools(tenantId: string, userId: string) {
     },
   );
 
+  const searchPastConversations = tool(
+    async ({ query, limit }) => {
+      const messages = await memoryService.searchConversations(tenantId, userId, query, limit ?? 10);
+      if (messages.length === 0) return "No past messages matching that query were found, across any conversation.";
+      return messages
+        .map((m) => `[${m.createdAt}] ${m.role === "user" ? "User" : "You"}: ${m.content}`)
+        .join("\n");
+    },
+    {
+      name: "search_past_conversations",
+      description:
+        "Search the user's own message history across ALL of their past conversations/threads, not just this " +
+        "one, for a keyword or phrase (case-insensitive substring match). Use this to answer questions like " +
+        "'what did I ask you about X before' or 'how many times have I asked about Y' - it returns the actual " +
+        "matching messages (newest first), so count/summarize from what's returned. If nothing is returned, " +
+        "say plainly that no matching past conversation was found rather than guessing.",
+      schema: z.object({
+        query: z.string().describe("Keyword or phrase to search for in past messages."),
+        limit: z.number().min(1).max(50).optional().describe("Max messages to return, default 10."),
+      }),
+    },
+  );
+
   const getActiveGoals = tool(
     async () => {
       const goals = await goalService.listActiveGoals(tenantId, userId);
@@ -85,7 +108,7 @@ export function buildMemoryTools(tenantId: string, userId: string) {
     },
   );
 
-  return [rememberFact, recallMemory, getSimilarExperiences, getActiveGoals];
+  return [rememberFact, recallMemory, getSimilarExperiences, getActiveGoals, searchPastConversations];
 }
 
 /** Builds a compact, token-aware context block of the user's known preferences/facts. */

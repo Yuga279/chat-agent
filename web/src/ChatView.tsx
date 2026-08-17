@@ -7,7 +7,7 @@ import {
   useConfigureSuggestions,
 } from "@copilotkit/react-core/v2";
 import "@copilotkit/react-core/v2/styles.css";
-import { getThreads, createThread, logout, type ThreadRecord } from "./api.js";
+import { getThreads, createThread, deleteThread, logout, type ThreadRecord } from "./api.js";
 import ThreadPanel from "./ThreadPanel.js";
 import InteractionRenderer from "./InteractionRenderer.js";
 import RunResyncGuard from "./RunResyncGuard.js";
@@ -61,17 +61,14 @@ export default function ChatView({ username, onLoggedOut }: { username: string; 
   const [showProfile, setShowProfile] = useState(false);
 
   useEffect(() => {
-    (async () => {
-      const existing = await getThreads();
-      if (existing.length > 0) {
-        setThreads(existing);
-        setThreadId(existing[0].threadId);
-        return;
-      }
-      const created = await createThread();
-      setThreads([{ threadId: created, createdAt: new Date().toISOString() }]);
-      setThreadId(created);
-    })();
+    // GET /api/threads guarantees a non-empty list itself (server-side ensureDefaultThreadId) -
+    // this used to also POST a new thread here whenever the list looked empty, which raced under
+    // React StrictMode's double-invoke (or any remount) and could create several duplicate
+    // threads for the same user before any of them saw each other's insert.
+    getThreads().then((existing) => {
+      setThreads(existing);
+      setThreadId(existing[0]?.threadId ?? null);
+    });
   }, []);
 
   async function handleLogout() {
@@ -87,6 +84,25 @@ export default function ChatView({ username, onLoggedOut }: { username: string; 
 
   function handleRenamed(renamedThreadId: string, title: string) {
     setThreads((prev) => prev.map((t) => (t.threadId === renamedThreadId ? { ...t, title } : t)));
+  }
+
+  async function handleDeleteThread(deletedThreadId: string) {
+    await deleteThread(deletedThreadId);
+    const remaining = threads.filter((t) => t.threadId !== deletedThreadId);
+    setThreads(remaining);
+
+    if (threadId !== deletedThreadId) return;
+
+    if (remaining.length > 0) {
+      setThreadId(remaining[0].threadId);
+      return;
+    }
+
+    // Deleted the last remaining thread - mint a fresh one rather than leaving the chat area
+    // empty, mirroring the server's own "never return an empty thread list" guarantee.
+    const created = await createThread();
+    setThreads([{ threadId: created, createdAt: new Date().toISOString() }]);
+    setThreadId(created);
   }
 
   // The "connect System1" link CopilotChat renders from markdown is a plain <a> that would
@@ -118,6 +134,7 @@ export default function ChatView({ username, onLoggedOut }: { username: string; 
           onSelect={setThreadId}
           onCreate={handleCreateThread}
           onRenamed={handleRenamed}
+          onDelete={handleDeleteThread}
         />
         {threadId && (
           // Keying on threadId forces a full remount when switching threads, so CopilotKit

@@ -14,12 +14,14 @@ export default function ThreadPanel({
   onSelect,
   onCreate,
   onRenamed,
+  onDelete,
 }: {
   threads: ThreadRecord[];
   activeThreadId: string | null;
   onSelect: (threadId: string) => void;
   onCreate: () => void;
   onRenamed: (threadId: string, title: string) => void;
+  onDelete: (threadId: string) => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
@@ -53,17 +55,32 @@ export default function ThreadPanel({
                 }}
               />
             ) : (
-              <button
-                className="thread-panel__item-label"
-                onClick={() => onSelect(thread.threadId)}
-                onDoubleClick={() => {
-                  setEditingId(thread.threadId);
-                  setEditingValue(thread.title ?? "");
-                }}
-                title="Double-click to rename"
-              >
-                {formatLabel(thread)}
-              </button>
+              <>
+                <button
+                  className="thread-panel__item-label"
+                  onClick={() => onSelect(thread.threadId)}
+                  onDoubleClick={() => {
+                    setEditingId(thread.threadId);
+                    setEditingValue(thread.title ?? "");
+                  }}
+                  title="Double-click to rename"
+                >
+                  {formatLabel(thread)}
+                </button>
+                <button
+                  className="thread-panel__item-delete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm("Delete this chat? This can't be undone.")) {
+                      onDelete(thread.threadId);
+                    }
+                  }}
+                  title="Delete chat"
+                  aria-label="Delete chat"
+                >
+                  ×
+                </button>
+              </>
             )}
           </li>
         ))}

@@ -21,6 +21,12 @@ them, just answer it - don't investigate or take action for something that doesn
 the linking instructions below using that same result.
 - Call remember_fact only for durable facts worth keeping for future questions (preferences, explicit \
 statements about the user), not for one-off findings or the question itself.
+- If the user asks about their own past messages across conversations (e.g. "what did I ask you before about X", \
+"how many times have I asked about Y", "have we discussed this before") - use search_past_conversations, not \
+get_similar_experiences (which only returns a few similar past task summaries, not actual message history) or \
+your own memory of this conversation alone. Base your answer strictly on what that tool returns: if it returns \
+nothing, say plainly that you found no matching past conversation - never estimate or guess a count from \
+partial results.
 
 ## Responding to the user
 Tool results are raw JSON meant for you, not the user - never paste, quote, or dump any part of a tool's raw \
