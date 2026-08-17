@@ -6,7 +6,6 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage }
 import { model } from "../llm.js";
 import { buildTools } from "../agents/sharedTools.js";
 import { buildMemoryTools, composePreferenceContext } from "../memory/memoryTools.js";
-import { memoryService } from "../memory/memoryService.js";
 import { goalService } from "../memory/goalService.js";
 import type { GoalRecord } from "../memory/types.js";
 import { extractText } from "../agents/shared.js";
@@ -16,6 +15,8 @@ import { ensureGraphReady } from "./simpleAgentGraph.js";
 import { silentJsonCompletion } from "../silentModel.js";
 import type { ResearchPlan } from "./planTypes.js";
 import type { AgentInteraction } from "./interactionTypes.js";
+import { appendNotLinkedButton } from "./notLinkedButton.js";
+import { persistChatMemory, recordEpisodeForRun, taskFromLatestUserMessage, type ToolCallRecord } from "./executePersistence.js";
 
 const MAX_TOOL_ITERATIONS = 6;
 
@@ -97,15 +98,6 @@ expose internal reasoning, only the observable steps.
 Respond with ONLY a JSON object (no markdown, no code fences, no commentary) matching exactly this shape:
 {"isMultiStep": boolean, "title": string, "steps": [{"title": string, "description": string}]}
 "steps" must be [] when isMultiStep is false.`;
-
-interface ToolCallRecord {
-  toolName: string;
-  arguments: Record<string, unknown> | undefined;
-  result: unknown;
-  status: "success" | "error";
-  startedAt: string;
-  completedAt: string;
-}
 
 interface ReactLoopResult {
   messages: Array<AIMessage | ToolMessage>;
@@ -292,140 +284,6 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
   }
 
   return { messages: newMessages, plan: updatedGoal ? goalToPlan(updatedGoal) : state.plan, goalId: goal.id };
-}
-
-/** Mirrors this turn's user message and final assistant reply into MongoDB (`conversation_messages`),
- * in addition to LangGraph's own thread checkpointing - see MemoryService.addMessage. Best-effort:
- * a failure here must never break the actual chat turn. */
-async function persistChatMemory(
-  state: GraphState,
-  config: RunnableConfig,
-  externalUserId: string,
-  newMessages: Array<AIMessage | ToolMessage>,
-): Promise<void> {
-  const sessionId = config.configurable?.thread_id as string | undefined;
-  if (!sessionId) return;
-  const threadId = sessionId;
-
-  try {
-    const latestUserMessage = [...state.messages].reverse().find((m) => m.getType() === "human");
-    if (latestUserMessage) {
-      await memoryService.addMessage(DEFAULT_TENANT_ID, externalUserId, threadId, sessionId, "user", String(latestUserMessage.content));
-    }
-
-    const finalReply = [...newMessages].reverse().find((m) => m.getType() === "ai" && extractText(m.content).length > 0);
-    if (finalReply) {
-      await memoryService.addMessage(DEFAULT_TENANT_ID, externalUserId, threadId, sessionId, "assistant", extractText(finalReply.content));
-    }
-  } catch (error) {
-    console.error("persistChatMemory failed (chat turn continues normally):", error);
-  }
-}
-
-/** Pulls the canonical link URL out of a NOT_LINKED:: sentinel ToolMessage (see sharedTools.ts),
- * so the connect button always uses the real URL regardless of how the model paraphrased it. */
-function extractNotLinkedUrl(newMessages: Array<AIMessage | ToolMessage>): string | null {
-  for (const message of newMessages) {
-    if (message.getType() !== "tool" || typeof message.content !== "string") continue;
-    const match = message.content.match(/^NOT_LINKED::(\S+)::/);
-    if (match) return match[1];
-  }
-  return null;
-}
-
-/** Deterministically appends a fixed-format connect link to the final assistant reply when a
- * not-linked tool result was seen this turn, so chat can reliably style/intercept it as a button
- * (web/src/style.css, ChatView.tsx) instead of depending on the model to relay the URL verbatim. */
-function appendNotLinkedButton(newMessages: Array<AIMessage | ToolMessage>): void {
-  const linkUrl = extractNotLinkedUrl(newMessages);
-  if (!linkUrl) return;
-
-  const finalAi = [...newMessages].reverse().find((m): m is AIMessage => m.getType() === "ai");
-  if (!finalAi) return;
-
-  // A weak model can echo the raw URL itself despite being told not to, or a retried tool call
-  // can otherwise cause this to run against text that already mentions the link - strip any
-  // existing occurrence of the URL (bare, or already wrapped in the canonical markdown link)
-  // before appending, so the button can never render twice.
-  const escapedUrl = linkUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const withoutExistingMentions = extractText(finalAi.content)
-    .replace(new RegExp(`\\[[^\\]]*\\]\\(${escapedUrl}\\)`, "g"), "")
-    .replace(new RegExp(escapedUrl, "g"), "")
-    .trim();
-
-  finalAi.content = `${withoutExistingMentions}\n\n[Connect your System1 account](${linkUrl})`;
-}
-
-function taskFromLatestUserMessage(state: GraphState): string {
-  const latestUserMessage = [...state.messages].reverse().find((m) => m.getType() === "human");
-  return latestUserMessage ? String(latestUserMessage.content) : "";
-}
-
-/** Records this turn (or goal step) as an episode - what `get_similar_experiences` reads back,
- * so it stops being a tool wired to a permanently empty collection. `success` is a simple
- * heuristic (no "Unknown tool:" fallback and no unlinked-account error surfaced) rather than
- * anything the model judges itself - good enough for "was there friction" without another model
- * call. Best-effort, same as persistChatMemory: never let a recording failure break the turn. */
-async function recordEpisodeForRun(
-  externalUserId: string,
-  threadId: string | null,
-  task: string,
-  newMessages: Array<AIMessage | ToolMessage>,
-  toolCalls: ToolCallRecord[],
-  goalId: string | null,
-  stepIndex: number | null,
-): Promise<void> {
-  if (!task) return;
-
-  try {
-    let success = true;
-    let failureReason: string | null = null;
-
-    for (const message of newMessages) {
-      if (message.getType() === "tool" && typeof message.content === "string") {
-        if (message.content.startsWith("Unknown tool:") || message.content.startsWith("NOT_LINKED::")) {
-          success = false;
-          failureReason = message.content.slice(0, 300);
-        }
-      }
-    }
-
-    const finalReply = [...newMessages].reverse().find((m) => m.getType() === "ai" && extractText(m.content).length > 0);
-    const outcome = finalReply ? extractText(finalReply.content) : "";
-
-    const episode = await memoryService.recordEpisode({
-      tenantId: DEFAULT_TENANT_ID,
-      userId: externalUserId,
-      threadId,
-      sessionId: threadId,
-      goalId,
-      stepIndex,
-      task,
-      actions: toolCalls.map((c) => ({ toolName: c.toolName, status: c.status, startedAt: c.startedAt })),
-      outcome,
-      success,
-      failureReason,
-      importance: 0.4,
-    });
-
-    for (const call of toolCalls) {
-      await memoryService.recordToolExecution({
-        tenantId: DEFAULT_TENANT_ID,
-        userId: externalUserId,
-        threadId,
-        sessionId: threadId,
-        episodeId: episode.id,
-        toolName: call.toolName,
-        arguments: call.arguments,
-        result: call.result,
-        status: call.status,
-        startedAt: call.startedAt,
-        completedAt: call.completedAt,
-      });
-    }
-  } catch (error) {
-    console.error("recordEpisodeForRun failed (chat turn continues normally):", error);
-  }
 }
 
 function routeAfterCheckGoal(state: GraphState): "planReview" | "execute" | "planner" {

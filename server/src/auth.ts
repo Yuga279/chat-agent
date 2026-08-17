@@ -12,25 +12,29 @@ export interface AuthedRequest extends Request {
   userId?: string;
 }
 
+/** Verifies a session JWT and confirms the user it names still exists, returning that user's
+ * id or null (never throws). Shared by requireAuth, /auth/me, and copilotRuntime.ts's
+ * resolveExternalUserId, which all need the same verify-then-lookup sequence but shape the
+ * failure case differently (401 vs. `{authenticated: false}` vs. null). */
+export async function verifySessionToken(token: string | undefined): Promise<string | null> {
+  if (!token) return null;
+  try {
+    const payload = jwt.verify(token, config.jwtSecret) as { sub: string };
+    return (await findUserById(payload.sub)) ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function requireAuth(req: AuthedRequest, res: Response, next: NextFunction): Promise<void> {
-  const token = req.cookies?.[SESSION_COOKIE];
-  if (!token) {
+  const userId = await verifySessionToken(req.cookies?.[SESSION_COOKIE]);
+  if (!userId) {
     res.status(401).json({ error: "Not authenticated" });
     return;
   }
 
-  try {
-    const payload = jwt.verify(token, config.jwtSecret) as { sub: string };
-    if (!(await findUserById(payload.sub))) {
-      res.status(401).json({ error: "Not authenticated" });
-      return;
-    }
-
-    req.userId = payload.sub;
-    next();
-  } catch {
-    res.status(401).json({ error: "Not authenticated" });
-  }
+  req.userId = userId;
+  next();
 }
 
 function issueSession(res: Response, userId: string): void {
@@ -85,23 +89,18 @@ export function registerAuthRoutes(app: Express): void {
   });
 
   app.get("/auth/me", async (req: AuthedRequest, res: Response) => {
-    const token = req.cookies?.[SESSION_COOKIE];
-    if (!token) {
+    const userId = await verifySessionToken(req.cookies?.[SESSION_COOKIE]);
+    if (!userId) {
       res.status(200).json({ authenticated: false });
       return;
     }
 
-    try {
-      const payload = jwt.verify(token, config.jwtSecret) as { sub: string };
-      const user = await findUserById(payload.sub);
-      if (!user) {
-        res.status(200).json({ authenticated: false });
-        return;
-      }
-
-      res.status(200).json({ authenticated: true, id: user.id, username: user.username });
-    } catch {
+    const user = await findUserById(userId);
+    if (!user) {
       res.status(200).json({ authenticated: false });
+      return;
     }
+
+    res.status(200).json({ authenticated: true, id: user.id, username: user.username });
   });
 }

@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { requireAuth, type AuthedRequest } from "./auth.js";
 import { claimOrVerifyThreadOwnership } from "./threadOwnership.js";
+import { extractText } from "./agents/shared.js";
 
 const LANGGRAPH_DEPLOYMENT_URL = process.env.LANGGRAPH_DEPLOYMENT_URL ?? "http://localhost:2024";
 
@@ -18,14 +19,6 @@ interface AgUiMessage {
   content: string;
   toolCalls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>;
   toolCallId?: string;
-}
-
-function extractText(content: LangChainMessage["content"]): string {
-  if (typeof content === "string") return content;
-  return content
-    .filter((part): part is { type: "text"; text: string } => part.type === "text" && typeof part.text === "string")
-    .map((part) => part.text)
-    .join("");
 }
 
 /** Converts LangGraph's raw checkpointed messages (GET /threads/:id/state) into the AG-UI

@@ -1,9 +1,7 @@
-import jwt from "jsonwebtoken";
 import { filter, map, Observable } from "rxjs";
 import { LangGraphAgent, type ProcessedEvents } from "@ag-ui/langgraph";
 import type { BaseEvent, RunAgentInput } from "@ag-ui/client";
-import { config } from "./config.js";
-import { findUserById } from "./db.js";
+import { verifySessionToken } from "./auth.js";
 import { claimOrVerifyThreadOwnership } from "./threadOwnership.js";
 
 const SESSION_COOKIE = "session";
@@ -32,14 +30,7 @@ function parseCookieHeader(header: string | null): Record<string, string> {
  */
 async function resolveExternalUserId(request: Request): Promise<string | null> {
   const token = parseCookieHeader(request.headers.get("cookie"))[SESSION_COOKIE];
-  if (!token) return null;
-
-  try {
-    const payload = jwt.verify(token, config.jwtSecret) as { sub: string };
-    return (await findUserById(payload.sub)) ? payload.sub : null;
-  } catch {
-    return null;
-  }
+  return verifySessionToken(token);
 }
 
 /** Strips the underlying LangChain/LangGraph trace from every event before it reaches the

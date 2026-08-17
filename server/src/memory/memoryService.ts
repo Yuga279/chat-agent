@@ -170,28 +170,18 @@ export class MemoryService {
       $or: [{ scope: "user" as const, userId }, { scope: "tenant" as const }],
     };
 
-    if (queryEmbedding) {
-      const candidates = await semanticMemoriesCollection()
-        .find({ ...scopeFilter, embedding: { $ne: null } }, NO_ID_PROJECTION)
-        .toArray();
-
-      if (candidates.length > 0) {
-        return candidates
-          .map((record) => ({ record, score: cosineSimilarity(queryEmbedding, record.embedding as number[]) }))
-          .sort((a, b) => b.score - a.score)
-          .slice(0, limit)
-          .map((x) => x.record);
-      }
-    }
-
-    return semanticMemoriesCollection()
-      .find(
-        { ...scopeFilter, content: { $regex: escapeRegExp(query), $options: "i" } },
-        NO_ID_PROJECTION,
-      )
-      .sort({ importance: -1, confidence: -1, updatedAt: -1 })
-      .limit(limit)
-      .toArray();
+    return rankByEmbeddingOrFallback({
+      queryEmbedding,
+      limit,
+      fetchEmbeddedCandidates: () =>
+        semanticMemoriesCollection().find({ ...scopeFilter, embedding: { $ne: null } }, NO_ID_PROJECTION).toArray(),
+      fallback: () =>
+        semanticMemoriesCollection()
+          .find({ ...scopeFilter, content: { $regex: escapeRegExp(query), $options: "i" } }, NO_ID_PROJECTION)
+          .sort({ importance: -1, confidence: -1, updatedAt: -1 })
+          .limit(limit)
+          .toArray(),
+    });
   }
 
   /** All active facts for a user, used to build compact context without a specific query. */
@@ -268,28 +258,24 @@ export class MemoryService {
   async findSimilarEpisodes(tenantId: string, userId: string, task: string, limit = 3): Promise<EpisodeRecord[]> {
     const queryEmbedding = await embedText(task);
 
-    if (queryEmbedding) {
-      const candidates = await episodesCollection()
-        .find({ tenantId, userId, embedding: { $ne: null } }, NO_ID_PROJECTION)
-        .toArray();
-
-      if (candidates.length > 0) {
-        return candidates
-          .map((record) => ({ record, score: cosineSimilarity(queryEmbedding, record.embedding as number[]) }))
-          .sort((a, b) => b.score - a.score)
-          .slice(0, limit)
-          .map((x) => x.record);
-      }
-    }
-
-    return episodesCollection()
-      .find({ tenantId, userId, task: { $regex: escapeRegExp(task), $options: "i" } }, NO_ID_PROJECTION)
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .toArray();
+    return rankByEmbeddingOrFallback({
+      queryEmbedding,
+      limit,
+      fetchEmbeddedCandidates: () =>
+        episodesCollection().find({ tenantId, userId, embedding: { $ne: null } }, NO_ID_PROJECTION).toArray(),
+      fallback: () =>
+        episodesCollection()
+          .find({ tenantId, userId, task: { $regex: escapeRegExp(task), $options: "i" } }, NO_ID_PROJECTION)
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .toArray(),
+    });
   }
 
   // ---- Post-task extraction: classify a message and persist anything durable ----
+  // NOTE: no callers anywhere in the codebase currently (see CLAUDE.md's "known gap" note) -
+  // the old clockwork agent's fire-and-forget fact-extraction pipeline has no equivalent in the
+  // current assistant graph. Kept, not deleted, since it's intended for a future revival.
 
   async extractAndPersist(tenantId: string, userId: string, message: string): Promise<SemanticMemoryRecord[]> {
     const facts = (await this.extractor.extract(message)).filter(
@@ -318,6 +304,30 @@ export class MemoryService {
 
     return persisted;
   }
+}
+
+/** Shared by recall() and findSimilarEpisodes(): rank by embedding cosine similarity when a
+ * query embedding and at least one stored embedding are available, otherwise fall back to a
+ * keyword scan so recall still works without an embedding provider. */
+async function rankByEmbeddingOrFallback<T extends { embedding: number[] | null }>(params: {
+  queryEmbedding: number[] | null;
+  limit: number;
+  fetchEmbeddedCandidates: () => Promise<T[]>;
+  fallback: () => Promise<T[]>;
+}): Promise<T[]> {
+  if (params.queryEmbedding) {
+    const candidates = await params.fetchEmbeddedCandidates();
+    if (candidates.length > 0) {
+      const queryEmbedding = params.queryEmbedding;
+      return candidates
+        .map((record) => ({ record, score: cosineSimilarity(queryEmbedding, record.embedding as number[]) }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, params.limit)
+        .map((x) => x.record);
+    }
+  }
+
+  return params.fallback();
 }
 
 function escapeRegExp(value: string): string {
