@@ -26,9 +26,12 @@ export function buildMemoryTools(tenantId: string, userId: string) {
     {
       name: "remember_fact",
       description:
-        "Store a durable fact or preference about the user so it can be recalled in future conversations " +
-        "(e.g. subject='user', predicate='prefers_currency', object='INR'). Only use for things that should " +
-        "persist beyond this conversation.",
+        "Store or UPDATE a durable fact or preference about the user (e.g. subject='user', " +
+        "predicate='prefers_currency', object='INR'). If this is a correction or reversal of something already " +
+        "remembered, reuse the exact same subject and predicate as before and only change the object - this " +
+        "supersedes the old value instead of creating a conflicting duplicate. Call recall_memory first if " +
+        "unsure whether a related fact already exists. Only use for things that should persist beyond this " +
+        "conversation.",
       schema: z.object({
         subject: z.string(),
         predicate: z.string(),

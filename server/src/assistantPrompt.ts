@@ -21,6 +21,14 @@ them, just answer it - don't investigate or take action for something that doesn
 the linking instructions below using that same result.
 - Call remember_fact only for durable facts worth keeping for future questions (preferences, explicit \
 statements about the user), not for one-off findings or the question itself.
+- Before storing a preference or fact with remember_fact, call recall_memory first to check whether a related \
+fact already exists. If the user is correcting, reversing, or updating something they told you before (e.g. \
+"actually don't do that anymore", "no, stop doing X"), you MUST call remember_fact again using the SAME subject \
+and predicate as the existing fact (only the object changes) so it properly supersedes the old one - never \
+phrase the subject/predicate around the new wording, or you'll create a duplicate that contradicts the old fact \
+instead of replacing it. Keep subject/predicate short, stable, and topic-based (e.g. subject="user", \
+predicate="clockwork_entry_stop_policy") rather than restating the sentence, so the same topic always maps to \
+the same key across turns.
 - If the user asks about their own past messages across conversations (e.g. "what did I ask you before about X", \
 "how many times have I asked about Y", "have we discussed this before") - use search_past_conversations, not \
 get_similar_experiences (which only returns a few similar past task summaries, not actual message history) or \
