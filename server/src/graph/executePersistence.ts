@@ -8,9 +8,31 @@ export interface ToolCallRecord {
   toolName: string;
   arguments: Record<string, unknown> | undefined;
   result: unknown;
-  status: "success" | "error";
+  status: "success" | "error" | "timeout";
   startedAt: string;
   completedAt: string;
+}
+
+/**
+ * Passive fact extraction: re-introduces the old clockwork agent's fire-and-forget pipeline that
+ * pulled durable facts out of any user message, not just explicit remember_fact calls (see
+ * CLAUDE.md's "known gap" note - memoryService.extractAndPersist() already existed but had zero
+ * callers). Runs an extra small structured-output LLM call per turn (LlmMemoryExtractor, ~300
+ * token budget) - a real cost, but it's what makes semantic_memories populate during normal
+ * conversation instead of staying empty until a user happens to ask to be remembered. Best-effort,
+ * same pattern as persistChatMemory/recordEpisodeForRun: never let a failure break the turn.
+ */
+export async function extractPassiveFacts(externalUserId: string, userMessage: string): Promise<void> {
+  if (!userMessage) return;
+
+  try {
+    const persisted = await memoryService.extractAndPersist(DEFAULT_TENANT_ID, externalUserId, userMessage);
+    // Cheap hit-rate signal: how often this extra LLM call actually finds something durable vs.
+    // running for nothing. Watch this in logs before deciding whether to gate/batch/drop it.
+    console.log(`extractPassiveFacts: ${persisted.length} fact(s) persisted for user ${externalUserId}`);
+  } catch (error) {
+    console.error("extractPassiveFacts failed (chat turn continues normally):", error);
+  }
 }
 
 export function taskFromLatestUserMessage(state: { messages: BaseMessage[] }): string {
@@ -78,36 +100,24 @@ export async function recordEpisodeForRun(
     const finalReply = [...newMessages].reverse().find((m) => m.getType() === "ai" && extractText(m.content).length > 0);
     const outcome = finalReply ? extractText(finalReply.content) : "";
 
-    const episode = await memoryService.recordEpisode({
+    await memoryService.recordEpisode({
       tenantId: DEFAULT_TENANT_ID,
       userId: externalUserId,
       threadId,
-      sessionId: threadId,
       goalId,
       stepIndex,
       task,
-      actions: toolCalls.map((c) => ({ toolName: c.toolName, status: c.status, startedAt: c.startedAt })),
+      actions: toolCalls.map((c) => ({
+        toolName: c.toolName,
+        status: c.status,
+        startedAt: new Date(c.startedAt),
+        durationMs: new Date(c.completedAt).getTime() - new Date(c.startedAt).getTime(),
+      })),
       outcome,
       success,
       failureReason,
       importance: 0.4,
     });
-
-    for (const call of toolCalls) {
-      await memoryService.recordToolExecution({
-        tenantId: DEFAULT_TENANT_ID,
-        userId: externalUserId,
-        threadId,
-        sessionId: threadId,
-        episodeId: episode.id,
-        toolName: call.toolName,
-        arguments: call.arguments,
-        result: call.result,
-        status: call.status,
-        startedAt: call.startedAt,
-        completedAt: call.completedAt,
-      });
-    }
   } catch (error) {
     console.error("recordEpisodeForRun failed (chat turn continues normally):", error);
   }

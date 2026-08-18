@@ -17,7 +17,7 @@ import { silentJsonCompletion } from "../silentModel.js";
 import type { ResearchPlan } from "./planTypes.js";
 import type { AgentInteraction } from "./interactionTypes.js";
 import { appendNotLinkedButton } from "./notLinkedButton.js";
-import { persistChatMemory, recordEpisodeForRun, taskFromLatestUserMessage, type ToolCallRecord } from "./executePersistence.js";
+import { extractPassiveFacts, persistChatMemory, recordEpisodeForRun, taskFromLatestUserMessage, type ToolCallRecord } from "./executePersistence.js";
 
 const MAX_TOOL_ITERATIONS = 6;
 
@@ -291,6 +291,7 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
     appendNotLinkedButton(newMessages);
     await persistChatMemory(state, config, externalUserId, newMessages);
     await recordEpisodeForRun(externalUserId, threadId, taskFromLatestUserMessage(state), newMessages, toolCalls, null, null);
+    await extractPassiveFacts(externalUserId, taskFromLatestUserMessage(state));
     return { messages: newMessages, plan: null, goalId: null };
   }
 
@@ -303,6 +304,7 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
     appendNotLinkedButton(newMessages);
     await persistChatMemory(state, config, externalUserId, newMessages);
     await recordEpisodeForRun(externalUserId, threadId, taskFromLatestUserMessage(state), newMessages, toolCalls, null, null);
+    await extractPassiveFacts(externalUserId, taskFromLatestUserMessage(state));
     return { messages: newMessages, plan: null, goalId: null };
   }
 
@@ -314,6 +316,9 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
   appendNotLinkedButton(newMessages);
   await persistChatMemory(state, config, externalUserId, newMessages);
   await recordEpisodeForRun(externalUserId, threadId, stepTask, newMessages, toolCalls, goal.id, goal.currentStepIndex);
+  // Extract from the user's actual latest message, not `stepTask` (the goal step's own synthetic
+  // title/description) - the user's raw wording is what might carry an implicit preference/fact.
+  await extractPassiveFacts(externalUserId, taskFromLatestUserMessage(state));
 
   const updatedGoal = await goalService.completeCurrentStep(goal.id);
   if (updatedGoal && updatedGoal.status === "done") {

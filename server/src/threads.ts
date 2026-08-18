@@ -22,7 +22,11 @@ export function registerThreadsRoute(app: Express): void {
       await ensureDefaultThreadId(req.userId!);
       threads = await listThreadsForUser(req.userId!);
     }
-    res.json({ threads });
+    // The frontend's Thread shape keys on `threadId`, not Mongo's `_id` - map here rather than
+    // changing every web/src call site over a purely internal storage-key rename.
+    res.json({
+      threads: threads.map((t) => ({ threadId: t._id, userId: t.userId, createdAt: t.createdAt, title: t.title })),
+    });
   });
 
   app.post("/api/threads", requireAuth, async (req: AuthedRequest, res) => {

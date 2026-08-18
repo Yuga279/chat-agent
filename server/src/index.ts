@@ -4,12 +4,11 @@ import express from "express";
 import cookieParser from "cookie-parser";
 import { config } from "./config.js";
 import { connectDb } from "./db.js";
-import { ensureMemoryIndexes } from "./memory/collections.js";
+import { ensureMemoryIndexes, ensureThreadIndexes } from "./memory/collections.js";
 import { registerAuthRoutes } from "./auth.js";
 import { createCopilotExpressHandler } from "@copilotkit/runtime/v2/express";
 import { CopilotRuntime } from "@copilotkit/runtime/v2";
 import { buildCopilotAgents } from "./copilotRuntime.js";
-import { ensureThreadOwnershipIndexes } from "./threadOwnership.js";
 import { registerThreadResyncRoute } from "./threadResync.js";
 import { registerThreadsRoute } from "./threads.js";
 import { registerSystem1StatusRoute } from "./system1Status.js";
@@ -20,7 +19,7 @@ const webDir = path.resolve(__dirname, "../../web/dist");
 async function main() {
   await connectDb();
   await ensureMemoryIndexes();
-  await ensureThreadOwnershipIndexes();
+  await ensureThreadIndexes();
   console.log(`Connected to MongoDB (${config.mongoUri}${config.mongoDbName})`);
 
   const app = express();

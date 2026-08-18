@@ -19,7 +19,7 @@ export class GoalService {
     title: string,
     steps: Array<{ title: string; description?: string }>,
   ): Promise<GoalRecord> {
-    const now = new Date().toISOString();
+    const now = new Date();
     const goal: GoalRecord = {
       id: randomUUID(),
       tenantId,
@@ -27,7 +27,7 @@ export class GoalService {
       threadId,
       title,
       status: "proposed",
-      steps: steps.map((s): GoalStep => ({ title: s.title, description: s.description, status: "pending" })),
+      steps: toGoalSteps(steps),
       currentStepIndex: 0,
       createdAt: now,
       updatedAt: now,
@@ -51,33 +51,34 @@ export class GoalService {
   async updateSteps(id: string, steps: Array<{ title: string; description?: string }>): Promise<GoalRecord | null> {
     await goalsCollection().updateOne(
       { id },
-      { $set: { steps: steps.map((s): GoalStep => ({ title: s.title, description: s.description, status: "pending" })), currentStepIndex: 0, updatedAt: new Date().toISOString() } },
+      { $set: { steps: toGoalSteps(steps), currentStepIndex: 0, updatedAt: new Date() } },
     );
     return this.getGoalById(id);
   }
 
   async approveGoal(id: string): Promise<GoalRecord | null> {
-    await goalsCollection().updateOne({ id }, { $set: { status: "active", updatedAt: new Date().toISOString() } });
+    await goalsCollection().updateOne({ id }, { $set: { status: "active", updatedAt: new Date() } });
     return this.getGoalById(id);
   }
 
   async abandonGoal(id: string): Promise<void> {
-    await goalsCollection().updateOne({ id }, { $set: { status: "abandoned", updatedAt: new Date().toISOString() } });
+    await goalsCollection().updateOne({ id }, { $set: { status: "abandoned", updatedAt: new Date() } });
   }
 
   /** Marks the goal's current step done and advances to the next one; marks the whole goal
-   * "done" once the last step is complete. */
+   * "done" once the last step is complete. currentStepIndex is clamped to the last valid index
+   * when done, rather than left one past the array end. */
   async completeCurrentStep(id: string): Promise<GoalRecord | null> {
     const goal = await this.getGoalById(id);
     if (!goal) return null;
 
     const steps = goal.steps.map((s, i) => (i === goal.currentStepIndex ? { ...s, status: "done" as const } : s));
-    const nextIndex = goal.currentStepIndex + 1;
-    const done = nextIndex >= steps.length;
+    const done = goal.currentStepIndex + 1 >= steps.length;
+    const nextIndex = done ? steps.length - 1 : goal.currentStepIndex + 1;
 
     await goalsCollection().updateOne(
       { id },
-      { $set: { steps, currentStepIndex: nextIndex, status: done ? "done" : "active", updatedAt: new Date().toISOString() } },
+      { $set: { steps, currentStepIndex: nextIndex, status: done ? "done" : "active", updatedAt: new Date() } },
     );
     return this.getGoalById(id);
   }
@@ -85,6 +86,10 @@ export class GoalService {
   async listActiveGoals(tenantId: string, userId: string, limit = 5): Promise<GoalRecord[]> {
     return goalsCollection().find({ tenantId, userId, status: "active" }, NO_ID_PROJECTION).sort({ createdAt: -1 }).limit(limit).toArray();
   }
+}
+
+function toGoalSteps(steps: Array<{ title: string; description?: string }>): GoalStep[] {
+  return steps.map((s, i) => ({ stepId: `step_${i}`, title: s.title, description: s.description, status: "pending" }));
 }
 
 export const goalService = new GoalService();

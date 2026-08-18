@@ -4,7 +4,7 @@ import type {
   EpisodeRecord,
   GoalRecord,
   SemanticMemoryRecord,
-  ToolExecutionRecord,
+  ThreadRecord,
 } from "./types.js";
 
 export function conversationMessagesCollection() {
@@ -23,8 +23,8 @@ export function goalsCollection() {
   return getDb().collection<GoalRecord>("goals");
 }
 
-export function toolExecutionsCollection() {
-  return getDb().collection<ToolExecutionRecord>("tool_executions");
+export function threadsCollection() {
+  return getDb().collection<ThreadRecord>("threads");
 }
 
 export async function ensureMemoryIndexes(): Promise<void> {
@@ -41,6 +41,19 @@ export async function ensureMemoryIndexes(): Promise<void> {
 
   await goalsCollection().createIndex({ tenantId: 1, userId: 1, status: 1, createdAt: -1 });
   await goalsCollection().createIndex({ tenantId: 1, threadId: 1 });
+}
 
-  await toolExecutionsCollection().createIndex({ tenantId: 1, episodeId: 1 });
+/**
+ * _id (the threadId itself) already gives ownership-claim uniqueness for free - no separate
+ * unique-compound-index is needed the way thread_owners required. The partial unique index below
+ * is what replaces default_thread_pointers: at most one isDefault:true document per
+ * (tenantId, userId), enforced the same insert-then-catch-duplicate-key way
+ * claimOrVerifyThreadOwnership always worked.
+ */
+export async function ensureThreadIndexes(): Promise<void> {
+  await threadsCollection().createIndex({ tenantId: 1, userId: 1, createdAt: -1 });
+  await threadsCollection().createIndex(
+    { tenantId: 1, userId: 1, isDefault: 1 },
+    { unique: true, partialFilterExpression: { isDefault: true } },
+  );
 }

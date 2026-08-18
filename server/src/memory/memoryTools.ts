@@ -17,7 +17,7 @@ export function buildMemoryTools(tenantId: string, userId: string) {
         subject,
         predicate,
         object,
-        source: { type: "explicit_tool_call", tenantId, userId, agent: "assistant" },
+        source: { type: "explicit_tool_call", agent: "assistant" },
         confidence: confidence ?? 0.9,
         importance: 0.8,
       });
