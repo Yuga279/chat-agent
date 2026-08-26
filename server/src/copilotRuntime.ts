@@ -85,7 +85,7 @@ class OwnedLangGraphAgent extends LangGraphAgent {
  * AgentsFactory for CopilotKit's v2 runtime: resolves the caller's session on every request
  * and hands back one fresh OwnedLangGraphAgent per graph, all bound to that user via
  * `assistantConfig.configurable` (merged server-side into every run's config - see
- * researchGraph.ts/simpleAgentGraph.ts, which read `config.configurable.externalUserId`).
+ * researchGraph.ts/assistantGraph.ts, which read `config.configurable.externalUserId`).
  * Keys must match langgraph.json's graph ids and the React app's agentId props.
  *
  * Deliberately does NOT throw when unauthenticated. This factory also backs the runtime's

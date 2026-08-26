@@ -12,7 +12,7 @@ import type { GoalRecord } from "../memory/types.js";
 import { extractText } from "../agents/shared.js";
 import { DEFAULT_TENANT_ID } from "../constants.js";
 import { ASSISTANT_SYSTEM_PROMPT } from "../assistantPrompt.js";
-import { ensureGraphReady } from "./simpleAgentGraph.js";
+import { ensureGraphReady } from "./graphBootstrap.js";
 import { silentJsonCompletion } from "../silentModel.js";
 import type { ResearchPlan } from "./planTypes.js";
 import type { AgentInteraction } from "./interactionTypes.js";

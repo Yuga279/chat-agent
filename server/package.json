@@ -11,6 +11,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file=.env dist/index.js",
+    "debug": "node --env-file=.env --inspect dist/index.js",
     "dev": "tsc -p tsconfig.json --watch",
     "graph:dev": "langgraphjs dev --port 2024",
     "verify:agui": "node --env-file=.env dist/scripts/verifyAgUiStream.js"
