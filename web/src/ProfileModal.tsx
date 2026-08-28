@@ -86,19 +86,22 @@ function MemorySection() {
       <h4>Workspaces</h4>
       <ul className="workspace-list">
         <li>
-          <button className={selectedWorkspaceId === "" ? "workspace-list__item--active" : ""} onClick={() => setSelectedWorkspaceId("")}>
+          <button
+            className={selectedWorkspaceId === "" ? "workspace-list__item workspace-list__item--active" : "workspace-list__item"}
+            onClick={() => setSelectedWorkspaceId("")}
+          >
             Personal
           </button>
         </li>
         {workspaces.map((ws) => (
           <li key={ws.id}>
             <button
-              className={selectedWorkspaceId === ws.id ? "workspace-list__item--active" : ""}
+              className={selectedWorkspaceId === ws.id ? "workspace-list__item workspace-list__item--active" : "workspace-list__item"}
               onClick={() => setSelectedWorkspaceId(ws.id)}
             >
               {ws.name}
             </button>
-            <button aria-label={`Delete workspace ${ws.name}`} onClick={() => handleDeleteWorkspace(ws.id)}>
+            <button className="workspace-list__delete" aria-label={`Delete workspace ${ws.name}`} onClick={() => handleDeleteWorkspace(ws.id)}>
               ×
             </button>
           </li>

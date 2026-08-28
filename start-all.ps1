@@ -36,6 +36,9 @@ Start-Service "LangGraph" "$root\server" "npm run graph:dev"
 Write-Host "Launching chat-agent server (port 3200)..."
 Start-Service "Server" "$root\server" "node --env-file=.env dist/index.js"
 
+Write-Host "Launching memory worker..."
+Start-Service "Memory Worker" "$root\server" "npm run memory:worker"
+
 Write-Host "Launching web dev server (port 5173)..."
 Start-Service "Web" "$root\web" "npm run dev"
 

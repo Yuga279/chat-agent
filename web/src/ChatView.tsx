@@ -145,10 +145,22 @@ export default function ChatView({ username, onLoggedOut }: { username: string; 
   return (
     <div className="view">
       <header>
-        <span>{username}</span>
-        <div>
-          <button onClick={() => setShowProfile(true)}>Profile</button>
-          <button onClick={handleLogout}>Log out</button>
+        <div className="header-brand">
+          <span className="header-brand__mark" aria-hidden="true">
+            S1
+          </span>
+          <span className="header-brand__name">System1 Chat</span>
+        </div>
+        <div className="header-user">
+          <button className="header-user__profile" onClick={() => setShowProfile(true)}>
+            <span className="header-user__avatar" aria-hidden="true">
+              {username.slice(0, 1).toUpperCase()}
+            </span>
+            <span>{username}</span>
+          </button>
+          <button className="header-user__logout" onClick={handleLogout}>
+            Log out
+          </button>
         </div>
       </header>
       {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
