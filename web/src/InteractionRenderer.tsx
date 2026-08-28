@@ -156,6 +156,24 @@ function PlanEditInteraction({ value, resolve }: { value: Extract<AgentInteracti
   );
 }
 
+function MemoryConsentInteraction({ value, resolve }: { value: Extract<AgentInteraction, { type: "memory_consent" }>; resolve: Resolve }) {
+  const { candidate } = value;
+  return (
+    <div className="interaction interaction--memory-consent">
+      <p className="interaction__title">Remember this?</p>
+      <p>{candidate.content}</p>
+      <div className="interaction__actions">
+        <button type="button" className="interaction__action interaction__action--primary" onClick={() => resolve({ action: "approve" })}>
+          Yes, remember it
+        </button>
+        <button type="button" className="interaction__action interaction__action--danger" onClick={() => resolve({ action: "reject" })}>
+          No, don't
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /**
  * §7's single generic renderer for every interrupt() call site in researchGraph.ts. Mounted
  * once per chat; `useInterrupt`'s default `renderInChat: true` publishes whichever variant is
@@ -213,6 +231,7 @@ export default function InteractionRenderer() {
       if (value.type === "approval") return <ApprovalInteraction value={value} resolve={doResolve} />;
       if (value.type === "question") return <QuestionInteraction value={value} resolve={doResolve} />;
       if (value.type === "plan_edit" && value.plan) return <PlanEditInteraction value={value} resolve={doResolve} />;
+      if (value.type === "memory_consent") return <MemoryConsentInteraction value={value} resolve={doResolve} />;
       return <></>;
     },
   });

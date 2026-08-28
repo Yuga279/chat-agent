@@ -10,12 +10,20 @@ import { config } from "./config.js";
  * at all, so there is nothing for that streaming machinery to capture. Use this only for
  * internal, non-conversational decisions (e.g. planning) that must never appear as chat output.
  */
-export async function silentJsonCompletion<T>(systemPrompt: string, userPrompt: string, schema: z.ZodType<T>): Promise<T> {
-  const raw = config.modelProvider === "gemini" ? await callGemini(systemPrompt, userPrompt) : await callOpenRouter(systemPrompt, userPrompt);
+export async function silentJsonCompletion<T>(
+  systemPrompt: string,
+  userPrompt: string,
+  schema: z.ZodType<T>,
+  maxTokens = 500,
+): Promise<T> {
+  const raw =
+    config.modelProvider === "gemini"
+      ? await callGemini(systemPrompt, userPrompt, maxTokens)
+      : await callOpenRouter(systemPrompt, userPrompt, maxTokens);
   return schema.parse(JSON.parse(raw));
 }
 
-async function callOpenRouter(systemPrompt: string, userPrompt: string): Promise<string> {
+async function callOpenRouter(systemPrompt: string, userPrompt: string, maxTokens: number): Promise<string> {
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -29,7 +37,7 @@ async function callOpenRouter(systemPrompt: string, userPrompt: string): Promise
         { role: "user", content: userPrompt },
       ],
       response_format: { type: "json_object" },
-      max_tokens: 500,
+      max_tokens: maxTokens,
     }),
   });
 
@@ -43,7 +51,7 @@ async function callOpenRouter(systemPrompt: string, userPrompt: string): Promise
   return content;
 }
 
-async function callGemini(systemPrompt: string, userPrompt: string): Promise<string> {
+async function callGemini(systemPrompt: string, userPrompt: string, maxTokens: number): Promise<string> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModelName}:generateContent?key=${config.geminiApiKey}`;
   const response = await fetch(url, {
     method: "POST",
@@ -51,7 +59,7 @@ async function callGemini(systemPrompt: string, userPrompt: string): Promise<str
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: systemPrompt }] },
       contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-      generationConfig: { responseMimeType: "application/json", maxOutputTokens: 500 },
+      generationConfig: { responseMimeType: "application/json", maxOutputTokens: maxTokens },
     }),
   });
 

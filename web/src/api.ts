@@ -38,6 +38,7 @@ export interface ThreadRecord {
   threadId: string;
   createdAt: string;
   title?: string;
+  workspaceId?: string | null;
 }
 
 export async function getThreads(): Promise<ThreadRecord[]> {
@@ -46,8 +47,12 @@ export async function getThreads(): Promise<ThreadRecord[]> {
   return data.threads ?? [];
 }
 
-export async function createThread(): Promise<string> {
-  const res = await fetch("/api/threads", { method: "POST" });
+export async function createThread(options?: { workspaceId?: string | null; temporary?: boolean }): Promise<string> {
+  const res = await fetch("/api/threads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options ?? {}),
+  });
   const data = await res.json();
   return data.threadId;
 }
@@ -58,6 +63,118 @@ export async function renameThread(threadId: string, title: string): Promise<voi
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
   });
+}
+
+/** Moves a thread to a different workspace (or back to personal scope with workspaceId: null). */
+export async function moveThreadToWorkspace(threadId: string, workspaceId: string | null): Promise<void> {
+  await fetch(`/api/threads/${threadId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId }),
+  });
+}
+
+/** "End temporary chat": flips the thread back to normal so it starts showing up in the thread
+ * list and its future turns start creating memory events again. */
+export async function endTemporaryChat(threadId: string): Promise<void> {
+  await fetch(`/api/threads/${threadId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ memoryMode: "normal" }),
+  });
+}
+
+export interface WorkspaceRecord {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
+export async function getWorkspaces(): Promise<WorkspaceRecord[]> {
+  const res = await fetch("/api/workspaces");
+  const data = await res.json();
+  return data.workspaces ?? [];
+}
+
+export async function createWorkspace(name: string): Promise<WorkspaceRecord> {
+  const res = await fetch("/api/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const data = await res.json();
+  return data.workspace;
+}
+
+export async function renameWorkspace(id: string, name: string): Promise<void> {
+  await fetch(`/api/workspaces/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function deleteWorkspace(id: string): Promise<void> {
+  await fetch(`/api/workspaces/${id}`, { method: "DELETE" });
+}
+
+export interface MemorySettings {
+  enabled: boolean;
+}
+
+export async function getMemorySettings(): Promise<MemorySettings> {
+  const res = await fetch("/api/memory/settings");
+  return res.json();
+}
+
+export async function setMemorySettings(enabled: boolean): Promise<void> {
+  await fetch("/api/memory/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export interface MemoryItem {
+  id: string;
+  scope: "user" | "workspace";
+  workspaceId: string | null;
+  kind: "preference" | "fact" | "episode";
+  subject: string;
+  predicate: string;
+  object: string;
+  content: string;
+  importance: number;
+  confidence: number;
+  sourceEventIds: string[];
+  updatedAt: string;
+}
+
+export async function getMemories(filter?: { scope?: "user" | "workspace"; workspaceId?: string }): Promise<MemoryItem[]> {
+  const params = new URLSearchParams();
+  if (filter?.scope) params.set("scope", filter.scope);
+  if (filter?.workspaceId) params.set("workspaceId", filter.workspaceId);
+  const res = await fetch(`/api/memories?${params.toString()}`);
+  const data = await res.json();
+  return data.items ?? [];
+}
+
+export async function updateMemory(id: string, patch: Partial<Pick<MemoryItem, "subject" | "predicate" | "object" | "content">>): Promise<void> {
+  await fetch(`/api/memories/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteMemory(id: string): Promise<void> {
+  await fetch(`/api/memories/${id}`, { method: "DELETE" });
+}
+
+export async function clearMemories(scope: "user" | "workspace", workspaceId?: string): Promise<void> {
+  const params = new URLSearchParams({ scope });
+  if (workspaceId) params.set("workspaceId", workspaceId);
+  await fetch(`/api/memories?${params.toString()}`, { method: "DELETE" });
 }
 
 export async function deleteThread(threadId: string): Promise<void> {

@@ -23,7 +23,15 @@ export interface AgentOption {
   description?: string;
 }
 
+export interface MemoryConsentCandidate {
+  subject: string;
+  predicate: string;
+  object: string;
+  content: string;
+}
+
 export type AgentInteraction =
   | { type: "approval"; id: string; title: string; message: string; actions: AgentAction[] }
   | { type: "question"; id: string; question: string; options: AgentOption[]; allowCustomInput: boolean }
-  | { type: "plan_edit"; id: string; plan: ResearchPlanState };
+  | { type: "plan_edit"; id: string; plan: ResearchPlanState }
+  | { type: "memory_consent"; id: string; candidate: MemoryConsentCandidate };

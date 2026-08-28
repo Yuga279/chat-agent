@@ -4,7 +4,7 @@ import express from "express";
 import cookieParser from "cookie-parser";
 import { config } from "./config.js";
 import { connectDb } from "./db.js";
-import { ensureMemoryIndexes, ensureThreadIndexes } from "./memory/collections.js";
+import { ensureMemoryIndexes, ensureMemoryV2Indexes, ensureThreadIndexes } from "./memory/collections.js";
 import { registerAuthRoutes } from "./auth.js";
 import { createCopilotExpressHandler } from "@copilotkit/runtime/v2/express";
 import { CopilotRuntime } from "@copilotkit/runtime/v2";
@@ -12,6 +12,9 @@ import { buildCopilotAgents } from "./copilotRuntime.js";
 import { registerThreadResyncRoute } from "./threadResync.js";
 import { registerThreadsRoute } from "./threads.js";
 import { registerSystem1StatusRoute } from "./system1Status.js";
+import { registerMemorySettingsRoutes } from "./memory/v2/memorySettingsRoutes.js";
+import { registerMemoriesRoutes } from "./memory/v2/memoriesRoutes.js";
+import { registerWorkspaceRoutes } from "./memory/v2/workspaceRoutes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const webDir = path.resolve(__dirname, "../../web/dist");
@@ -20,6 +23,7 @@ async function main() {
   await connectDb();
   await ensureMemoryIndexes();
   await ensureThreadIndexes();
+  await ensureMemoryV2Indexes();
   console.log(`Connected to MongoDB (${config.mongoUri}${config.mongoDbName})`);
 
   const app = express();
@@ -34,6 +38,9 @@ async function main() {
   registerThreadResyncRoute(app);
   registerThreadsRoute(app);
   registerSystem1StatusRoute(app);
+  registerMemorySettingsRoutes(app);
+  registerMemoriesRoutes(app);
+  registerWorkspaceRoutes(app);
 
   const copilotRuntime = new CopilotRuntime({ agents: buildCopilotAgents });
   app.use(

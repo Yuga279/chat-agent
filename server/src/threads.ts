@@ -7,7 +7,11 @@ import {
   ensureDefaultThreadId,
   listThreadsForUser,
   renameThread,
+  setThreadMemoryMode,
+  setThreadWorkspace,
 } from "./threadOwnership.js";
+import { DEFAULT_TENANT_ID } from "./constants.js";
+import { memoryRepository } from "./memory/v2/repository.js";
 
 const LANGGRAPH_DEPLOYMENT_URL = process.env.LANGGRAPH_DEPLOYMENT_URL ?? "http://localhost:2024";
 
@@ -22,31 +26,63 @@ export function registerThreadsRoute(app: Express): void {
       await ensureDefaultThreadId(req.userId!);
       threads = await listThreadsForUser(req.userId!);
     }
+    // Temporary threads are deliberately excluded from the thread list (PLAN.md's "Temporary
+    // chat" requirement) - they're reached only via the in-progress chat itself, never resumed
+    // from a list, and auto-expire on their own (see memoryWorker's TTL sweep).
+    const visible = threads.filter((t) => t.memoryMode !== "temporary");
     // The frontend's Thread shape keys on `threadId`, not Mongo's `_id` - map here rather than
     // changing every web/src call site over a purely internal storage-key rename.
     res.json({
-      threads: threads.map((t) => ({ threadId: t._id, userId: t.userId, createdAt: t.createdAt, title: t.title })),
+      threads: visible.map((t) => ({
+        threadId: t._id,
+        userId: t.userId,
+        createdAt: t.createdAt,
+        title: t.title,
+        workspaceId: t.workspaceId,
+      })),
     });
   });
 
   app.post("/api/threads", requireAuth, async (req: AuthedRequest, res) => {
     const threadId = crypto.randomUUID();
     await claimOrVerifyThreadOwnership(threadId, req.userId!);
+
+    const workspaceId = typeof req.body?.workspaceId === "string" ? req.body.workspaceId : null;
+    const temporary = req.body?.temporary === true;
+    if (workspaceId) await setThreadWorkspace(threadId, req.userId!, workspaceId);
+    if (temporary) await setThreadMemoryMode(threadId, req.userId!, "temporary");
+
     res.json({ threadId });
   });
 
   app.patch("/api/threads/:threadId", requireAuth, async (req: AuthedRequest, res) => {
     const { threadId } = req.params;
-    const title = typeof req.body?.title === "string" ? req.body.title.trim().slice(0, 200) : "";
-    if (!title) {
-      res.status(400).json({ error: "title is required" });
-      return;
+    const { title, workspaceId, memoryMode } = req.body ?? {};
+
+    if (typeof title === "string" && title.trim()) {
+      const renamed = await renameThread(threadId, req.userId!, title.trim().slice(0, 200));
+      if (!renamed) {
+        res.status(404).json({ error: "Thread not found" });
+        return;
+      }
     }
-    const renamed = await renameThread(threadId, req.userId!, title);
-    if (!renamed) {
-      res.status(404).json({ error: "Thread not found" });
-      return;
+
+    // Moving a thread to a different workspace rescopes its future memory writes going forward -
+    // existing items already written under the old scope are left alone (no retroactive
+    // re-creation/removal pass here; PLAN.md's rescope job is a larger async migration this
+    // synchronous PATCH deliberately does not attempt).
+    if (workspaceId !== undefined) {
+      const moved = await setThreadWorkspace(threadId, req.userId!, workspaceId === null ? null : String(workspaceId));
+      if (!moved) {
+        res.status(404).json({ error: "Thread not found" });
+        return;
+      }
     }
+
+    if (memoryMode === "normal" || memoryMode === "temporary") {
+      await setThreadMemoryMode(threadId, req.userId!, memoryMode);
+    }
+
     res.json({ ok: true });
   });
 
@@ -61,6 +97,17 @@ export function registerThreadsRoute(app: Express): void {
     if (!deleted) {
       res.status(404).json({ error: "Thread not found" });
       return;
+    }
+
+    // Source-aware memory cleanup (PLAN.md Phase 4): removes this thread's own outstanding
+    // memory_events (nothing further is ever leased for a deleted thread) and, for every item that
+    // cited one of those events as a source, either strips just that source or deletes the item
+    // once no source remains. Best-effort: the thread's own ownership record is already gone, so a
+    // cleanup failure here must not stop the delete from succeeding.
+    try {
+      await memoryRepository.deleteEventsAndCleanupForThread(DEFAULT_TENANT_ID, req.userId!, threadId);
+    } catch (error) {
+      console.error(`Memory cleanup failed for deleted thread ${threadId} (thread delete still succeeds):`, error);
     }
 
     try {

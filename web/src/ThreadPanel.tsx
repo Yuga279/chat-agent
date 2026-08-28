@@ -13,6 +13,7 @@ export default function ThreadPanel({
   activeThreadId,
   onSelect,
   onCreate,
+  onCreateTemporary,
   onRenamed,
   onDelete,
 }: {
@@ -20,6 +21,7 @@ export default function ThreadPanel({
   activeThreadId: string | null;
   onSelect: (threadId: string) => void;
   onCreate: () => void;
+  onCreateTemporary?: () => void;
   onRenamed: (threadId: string, title: string) => void;
   onDelete: (threadId: string) => void;
 }) {
@@ -39,6 +41,11 @@ export default function ThreadPanel({
       <button className="thread-panel__new" onClick={onCreate}>
         + New chat
       </button>
+      {onCreateTemporary && (
+        <button className="thread-panel__new thread-panel__new--temporary" onClick={onCreateTemporary}>
+          + Temporary chat
+        </button>
+      )}
       <ul className="thread-panel__list">
         {threads.map((thread) => (
           <li key={thread.threadId} className={thread.threadId === activeThreadId ? "thread-panel__item thread-panel__item--active" : "thread-panel__item"}>

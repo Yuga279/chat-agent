@@ -7,7 +7,7 @@ import {
   useConfigureSuggestions,
 } from "@copilotkit/react-core/v2";
 import "@copilotkit/react-core/v2/styles.css";
-import { getThreads, createThread, deleteThread, logout, type ThreadRecord } from "./api.js";
+import { getThreads, createThread, deleteThread, endTemporaryChat, logout, type ThreadRecord } from "./api.js";
 import ThreadPanel from "./ThreadPanel.js";
 import InteractionRenderer from "./InteractionRenderer.js";
 import RunResyncGuard from "./RunResyncGuard.js";
@@ -59,6 +59,9 @@ export default function ChatView({ username, onLoggedOut }: { username: string; 
   const [threads, setThreads] = useState<ThreadRecord[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [showProfile, setShowProfile] = useState(false);
+  // Temporary threads are excluded from GET /api/threads (server-side), so this is the only
+  // record that the currently open thread is one - cleared on thread switch/end.
+  const [isTemporaryThread, setIsTemporaryThread] = useState(false);
 
   useEffect(() => {
     // GET /api/threads guarantees a non-empty list itself (server-side ensureDefaultThreadId) -
@@ -80,6 +83,28 @@ export default function ChatView({ username, onLoggedOut }: { username: string; 
     const created = await createThread();
     setThreads((prev) => [{ threadId: created, createdAt: new Date().toISOString() }, ...prev]);
     setThreadId(created);
+    setIsTemporaryThread(false);
+  }
+
+  /** Starts a chat whose turns never create memory events/retrieval context and whose LangGraph
+   * thread auto-expires after 24h if not explicitly ended (server-side, see memoryWorker's TTL
+   * sweep) - not added to `threads` since the server excludes temporary threads from the list. */
+  async function handleCreateTemporaryThread() {
+    const created = await createThread({ temporary: true });
+    setThreadId(created);
+    setIsTemporaryThread(true);
+  }
+
+  async function handleEndTemporaryChat() {
+    if (!threadId) return;
+    await endTemporaryChat(threadId);
+    setIsTemporaryThread(false);
+    setThreads((prev) => [{ threadId, createdAt: new Date().toISOString() }, ...prev]);
+  }
+
+  function handleSelectThread(selectedThreadId: string) {
+    setThreadId(selectedThreadId);
+    setIsTemporaryThread(false);
   }
 
   function handleRenamed(renamedThreadId: string, title: string) {
@@ -131,24 +156,33 @@ export default function ChatView({ username, onLoggedOut }: { username: string; 
         <ThreadPanel
           threads={threads}
           activeThreadId={threadId}
-          onSelect={setThreadId}
+          onSelect={handleSelectThread}
           onCreate={handleCreateThread}
+          onCreateTemporary={handleCreateTemporaryThread}
           onRenamed={handleRenamed}
           onDelete={handleDeleteThread}
         />
         {threadId && (
-          // Keying on threadId forces a full remount when switching threads, so CopilotKit
-          // re-initializes against the newly selected thread's checkpointed history instead of
-          // continuing to render the previous thread's client-side state.
-          <CopilotKit key={threadId} runtimeUrl="/api/copilotkit" credentials="include" useSingleEndpoint={false}>
-            <CopilotChatConfigurationProvider agentId={AGENT_ID} threadId={threadId}>
-              <ThreadHistoryLoader threadId={threadId} />
-              <ChatSuggestions />
-              <RunResyncGuard />
-              <InteractionRenderer />
-              <CopilotChat className="research-chat" />
-            </CopilotChatConfigurationProvider>
-          </CopilotKit>
+          <div className="chat-area">
+            {isTemporaryThread && (
+              <div className="temporary-chat-banner">
+                <span>Temporary chat - not saved to your chat list or remembered.</span>
+                <button onClick={handleEndTemporaryChat}>End temporary chat</button>
+              </div>
+            )}
+            {/* Keying on threadId forces a full remount when switching threads, so CopilotKit
+                re-initializes against the newly selected thread's checkpointed history instead of
+                continuing to render the previous thread's client-side state. */}
+            <CopilotKit key={threadId} runtimeUrl="/api/copilotkit" credentials="include" useSingleEndpoint={false}>
+              <CopilotChatConfigurationProvider agentId={AGENT_ID} threadId={threadId}>
+                <ThreadHistoryLoader threadId={threadId} />
+                <ChatSuggestions />
+                <RunResyncGuard />
+                <InteractionRenderer />
+                <CopilotChat className="research-chat" />
+              </CopilotChatConfigurationProvider>
+            </CopilotKit>
+          </div>
         )}
       </div>
     </div>

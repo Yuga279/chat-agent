@@ -63,6 +63,66 @@ export async function embedText(text: string): Promise<number[] | null> {
   }
 }
 
+/**
+ * Batch wrapper around Gemini's batchEmbedContents endpoint, for the memory worker embedding many
+ * pending MemoryItemRecords in one call instead of one embedText() round trip per item. Returns
+ * one entry per input text, in the same order, with null in place of any text whose embedding
+ * failed - same never-throws contract as embedText(). Gemini caps batchEmbedContents at 100
+ * requests per call; callers with more than that should chunk before calling this.
+ */
+export async function embedTextBatch(texts: string[]): Promise<Array<number[] | null>> {
+  if (texts.length === 0) return [];
+
+  if (!config.geminiApiKey) {
+    if (!warnedMissingKey) {
+      console.warn(
+        "embedTextBatch: GEMINI_API_KEY is not set - memory item embeddings will stay pending/null " +
+          "for the rest of this process. Set GEMINI_API_KEY to enable it (required regardless of MODEL_PROVIDER).",
+      );
+      warnedMissingKey = true;
+    }
+    return texts.map(() => null);
+  }
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:batchEmbedContents?key=${config.geminiApiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requests: texts.map((text) => ({
+            model: `models/${EMBEDDING_MODEL}`,
+            content: { parts: [{ text }] },
+          })),
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      console.error(
+        `embedTextBatch: request to Gemini batchEmbedContents (model "${EMBEDDING_MODEL}") failed with ` +
+          `${response.status} - all ${texts.length} item(s) in this batch stay unembedded.`,
+        await response.text(),
+      );
+      return texts.map(() => null);
+    }
+
+    const body = (await response.json()) as { embeddings?: Array<{ values: number[] }> };
+    if (!body.embeddings || body.embeddings.length !== texts.length) {
+      console.error(
+        "embedTextBatch: Gemini batchEmbedContents returned an unexpected number of results - " +
+          "all item(s) in this batch stay unembedded.",
+      );
+      return texts.map(() => null);
+    }
+    return body.embeddings.map((e) => e.values ?? null);
+  } catch (error) {
+    console.error("embedTextBatch: request threw - all item(s) in this batch stay unembedded.", error);
+    return texts.map(() => null);
+  }
+}
+
 export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0;
   let normA = 0;

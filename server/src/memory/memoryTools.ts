@@ -1,27 +1,100 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { tool } from "@langchain/core/tools";
+import { interrupt } from "@langchain/langgraph";
 import { memoryService } from "./memoryService.js";
 import { goalService } from "./goalService.js";
+import { config } from "../config.js";
+import { memoryPolicy } from "./v2/policy.js";
+import { memoryRepository } from "./v2/repository.js";
+import type { MemoryItemScope } from "./types.js";
+import type { AgentInteraction } from "../graph/interactionTypes.js";
 
 /**
  * LangChain tools backed by MemoryService. These are the only surface an agent gets onto
  * memory - no direct DB access is ever exposed to the LLM.
+ *
+ * `scope`/`workspaceId` are only used by remember_fact's v2 write path (config.memoryV2Enabled) -
+ * when v2 is off, remember_fact falls back to the legacy tenant/user-scoped semantic_memories
+ * write exactly as before.
  */
-export function buildMemoryTools(tenantId: string, userId: string) {
+export function buildMemoryTools(
+  tenantId: string,
+  userId: string,
+  memoryScope: { scope: MemoryItemScope; workspaceId: string | null } = { scope: "user", workspaceId: null },
+) {
   const rememberFact = tool(
     async ({ subject, predicate, object, confidence }) => {
-      const record = await memoryService.remember({
+      if (!config.memoryV2Enabled) {
+        const record = await memoryService.remember({
+          tenantId,
+          userId,
+          type: "semantic",
+          subject,
+          predicate,
+          object,
+          source: { type: "explicit_tool_call", agent: "assistant" },
+          confidence: confidence ?? 0.9,
+          importance: 0.8,
+        });
+        return `Remembered: ${record.content}`;
+      }
+
+      const content = `${subject} ${predicate}: ${object}`;
+      const sensitivity = memoryPolicy.classify({ subject, predicate, object, content });
+
+      if (sensitivity === "sensitive") {
+        const interaction: AgentInteraction = {
+          type: "memory_consent",
+          id: randomUUID(),
+          candidate: { subject, predicate, object, content },
+        };
+        // Pauses the whole graph run at this point in the ReAct loop - same interrupt()
+        // mechanism planReviewNode uses. Nothing is written until the user approves; a rejection
+        // (or any other resume shape) leaves no trace at all.
+        const resume = interrupt(interaction) as { action: "approve" | "reject" };
+        if (resume.action !== "approve") {
+          return "Okay, I won't remember that.";
+        }
+      }
+
+      const canonicalKey = `${subject}.${predicate}`.toLowerCase();
+      const existing = await memoryRepository.findActiveItemByCanonicalKey(
         tenantId,
         userId,
-        type: "semantic",
+        memoryScope.scope,
+        memoryScope.workspaceId,
+        canonicalKey,
+      );
+      const item = await memoryRepository.insertItem({
+        tenantId,
+        userId,
+        scope: memoryScope.scope,
+        workspaceId: memoryScope.workspaceId,
+        kind: "fact",
+        canonicalKey,
         subject,
         predicate,
         object,
-        source: { type: "explicit_tool_call", agent: "assistant" },
+        content,
         confidence: confidence ?? 0.9,
         importance: 0.8,
+        sensitivity,
+        status: "active",
+        supersedes: existing?.id ?? null,
+        validFrom: new Date(),
+        validTo: null,
+        sourceEventIds: [],
+        embedding: null,
+        embeddingStatus: "pending",
       });
-      return `Remembered: ${record.content}`;
+      if (existing) {
+        await memoryRepository.supersedeItem(existing.id, item.id);
+        await memoryRepository.recordRevision(tenantId, userId, existing.id, "superseded", existing, { supersedes: item.id });
+      }
+      await memoryRepository.recordRevision(tenantId, userId, item.id, "manual_edit", null, item, "explicit remember_fact tool call");
+
+      return `Remembered: ${content}`;
     },
     {
       name: "remember_fact",
@@ -92,6 +165,15 @@ export function buildMemoryTools(tenantId: string, userId: string) {
     },
   );
 
+  return [rememberFact, recallMemory, getSimilarExperiences, searchPastConversations];
+}
+
+/**
+ * Goal tools are split out from memory tools (PLAN.md's Phase 3 requirement) so they can stay
+ * available even when memory reads/writes are paused or the thread is temporary - a durable goal
+ * is orthogonal to whether facts/preferences are being remembered this turn.
+ */
+export function buildGoalTools(tenantId: string, userId: string) {
   const getActiveGoals = tool(
     async () => {
       const goals = await goalService.listActiveGoals(tenantId, userId);
@@ -111,7 +193,7 @@ export function buildMemoryTools(tenantId: string, userId: string) {
     },
   );
 
-  return [rememberFact, recallMemory, getSimilarExperiences, getActiveGoals, searchPastConversations];
+  return [getActiveGoals];
 }
 
 /** Builds a compact, token-aware context block of the user's known preferences/facts. */

@@ -14,7 +14,11 @@
     "debug": "node --env-file=.env --inspect dist/index.js",
     "dev": "tsc -p tsconfig.json --watch",
     "graph:dev": "langgraphjs dev --port 2024",
-    "verify:agui": "node --env-file=.env dist/scripts/verifyAgUiStream.js"
+    "verify:agui": "node --env-file=.env dist/scripts/verifyAgUiStream.js",
+    "memory:provision-indexes": "node --env-file=.env dist/scripts/provisionMemoryIndexes.js",
+    "memory:verify": "node --env-file=.env dist/scripts/verifyMemoryV2.js",
+    "memory:worker": "node --env-file=.env dist/scripts/runMemoryWorker.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "@ag-ui/client": "^0.0.57",
@@ -45,6 +49,7 @@
     "@types/jsonwebtoken": "^9.0.6",
     "@types/node": "^20.14.10",
     "@types/uuid": "^9.0.8",
-    "typescript": "^5.5.3"
+    "typescript": "^5.5.3",
+    "vitest": "^2.1.4"
   }
 }

@@ -18,6 +18,12 @@ export const config = {
   mongoUri: process.env.MONGO_URI ?? "mongodb://localhost:27017/",
   mongoDbName: process.env.MONGO_DB_NAME ?? "chat_agent",
   port: Number(process.env.PORT ?? 3200),
+
+  // Memory v2 (see PLAN.md / CLAUDE.md's memory section). All default off/conservative so v1
+  // behavior is unchanged until Atlas indexes + Gemini creds + `npm run memory:verify` pass.
+  memoryV2Enabled: process.env.MEMORY_V2_ENABLED === "true",
+  memoryCaptureEnabled: process.env.MEMORY_CAPTURE_ENABLED !== "false",
+  memoryRetrievalEnabled: process.env.MEMORY_RETRIEVAL_ENABLED !== "false",
 };
 
 if (config.modelProvider === "gemini" && !config.geminiApiKey) {

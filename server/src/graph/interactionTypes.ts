@@ -17,7 +17,18 @@ export interface AgentOption {
  * call in researchGraph.ts sends one of these three variants; the resume value's shape is
  * documented next to each interrupt call site since it's specific to that variant.
  */
+/** A sensitive remember_fact candidate (per memory/v2/policy.ts's MemoryPolicy) pausing for
+ * explicit approval before it's ever written - see assistantGraph.ts's pendingMemoryConsent
+ * wiring and CLAUDE.md's memory v2 notes. */
+export interface MemoryConsentCandidate {
+  subject: string;
+  predicate: string;
+  object: string;
+  content: string;
+}
+
 export type AgentInteraction =
   | { type: "approval"; id: string; title: string; message: string; actions: AgentAction[] }
   | { type: "question"; id: string; question: string; options: AgentOption[]; allowCustomInput: boolean }
-  | { type: "plan_edit"; id: string; plan: ResearchPlan };
+  | { type: "plan_edit"; id: string; plan: ResearchPlan }
+  | { type: "memory_consent"; id: string; candidate: MemoryConsentCandidate };

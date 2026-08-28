@@ -24,6 +24,8 @@ export async function claimOrVerifyThreadOwnership(
       userId,
       status: "active",
       isDefault: false,
+      workspaceId: null,
+      memoryMode: "normal",
       createdAt: now,
       updatedAt: now,
     });
@@ -60,6 +62,8 @@ export async function ensureDefaultThreadId(userId: string, tenantId: string = D
       userId,
       status: "active",
       isDefault: true,
+      workspaceId: null,
+      memoryMode: "normal",
       createdAt: now,
       updatedAt: now,
     });
@@ -82,6 +86,53 @@ export async function deleteThreadOwnership(
 ): Promise<boolean> {
   const result = await threadsCollection().deleteOne({ _id: threadId, tenantId, userId });
   return result.deletedCount > 0;
+}
+
+/** Bounded lookup used on every graph run (resolveContext) to decide whether this turn's memory
+ * reads/writes should happen at all, and which workspace to scope them to. Defaults to
+ * normal/no-workspace for a threadId this table doesn't know about yet, rather than throwing -
+ * assistantGraph.ts must never fail a turn because of a memory-settings lookup. */
+export async function getThreadMemorySettings(
+  threadId: string,
+  tenantId: string = DEFAULT_TENANT_ID,
+): Promise<{ workspaceId: string | null; memoryMode: "normal" | "temporary" }> {
+  const thread = await threadsCollection().findOne(
+    { _id: threadId, tenantId },
+    { projection: { workspaceId: 1, memoryMode: 1 } },
+  );
+  return { workspaceId: thread?.workspaceId ?? null, memoryMode: thread?.memoryMode ?? "normal" };
+}
+
+export async function setThreadWorkspace(
+  threadId: string,
+  userId: string,
+  workspaceId: string | null,
+  tenantId: string = DEFAULT_TENANT_ID,
+): Promise<boolean> {
+  const result = await threadsCollection().updateOne(
+    { _id: threadId, tenantId, userId },
+    { $set: { workspaceId, updatedAt: new Date() } },
+  );
+  return result.matchedCount > 0;
+}
+
+export async function setThreadMemoryMode(
+  threadId: string,
+  userId: string,
+  memoryMode: "normal" | "temporary",
+  tenantId: string = DEFAULT_TENANT_ID,
+): Promise<boolean> {
+  const result = await threadsCollection().updateOne(
+    { _id: threadId, tenantId, userId },
+    { $set: { memoryMode, updatedAt: new Date() } },
+  );
+  return result.matchedCount > 0;
+}
+
+/** Used by workspace deletion: unassigns every thread pointing at a deleted workspace, without
+ * touching the threads/chats themselves (only their memory scoping). */
+export async function unassignWorkspaceFromThreads(workspaceId: string, tenantId: string = DEFAULT_TENANT_ID): Promise<void> {
+  await threadsCollection().updateMany({ tenantId, workspaceId }, { $set: { workspaceId: null, updatedAt: new Date() } });
 }
 
 export async function renameThread(
