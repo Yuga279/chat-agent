@@ -5,6 +5,7 @@ import type { MemoryEventRecord, MemoryItemScope } from "../types.js";
 import { memoryConsolidator, type MemoryConsolidator } from "./consolidator.js";
 import { memoryExtractor, type MemoryExtractor } from "./extractor.js";
 import { memoryRepository, type MemoryRepository } from "./repository.js";
+import { memorySummarizer, type MemorySummarizer } from "./summarizer.js";
 
 const BATCH_MAX_EVENTS = 10;
 const BATCH_MAX_CHARS = 12_000;
@@ -50,6 +51,7 @@ export class MemoryWorker {
     private readonly repo: MemoryRepository = memoryRepository,
     private readonly extractor: MemoryExtractor = memoryExtractor,
     private readonly consolidator: MemoryConsolidator = memoryConsolidator,
+    private readonly summarizer: MemorySummarizer = memorySummarizer,
   ) {}
 
   /** Runs at most one eligible batch to completion; returns whether it found and processed one -
@@ -116,12 +118,34 @@ export class MemoryWorker {
 
       await this.repo.markEventsDone(sourceEventIds);
       await this.embedPendingItems();
+      await this.refreshSummaries(tenantId, userId, first.threadId, workspaceId, events);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`MemoryWorker.processBatch failed for user ${userId} thread ${first.threadId}:`, error);
       for (const event of events) {
         await this.repo.failEvent(event.id, message, MAX_ATTEMPTS);
       }
+    }
+  }
+
+  /** Regenerates this batch's thread recap plus the user/workspace profile cards. Called after
+   * markEventsDone(), so a failure here must never re-fail events that already succeeded -
+   * best-effort and self-contained, same contract as embedPendingItems(). */
+  private async refreshSummaries(
+    tenantId: string,
+    userId: string,
+    threadId: string,
+    workspaceId: string | null,
+    events: MemoryEventRecord[],
+  ): Promise<void> {
+    try {
+      await this.summarizer.refreshThreadSummary(tenantId, userId, threadId, events);
+      await this.summarizer.refreshProfileCard(tenantId, userId, "user", null);
+      if (workspaceId) {
+        await this.summarizer.refreshProfileCard(tenantId, userId, "workspace", workspaceId);
+      }
+    } catch (error) {
+      console.error(`MemoryWorker.refreshSummaries failed for user ${userId} thread ${threadId} (batch itself already succeeded):`, error);
     }
   }
 

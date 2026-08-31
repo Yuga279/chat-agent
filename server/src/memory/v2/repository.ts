@@ -6,7 +6,7 @@ import {
   memorySummariesCollection,
   memoryWorkerLocksCollection,
 } from "../collections.js";
-import type { MemoryEventRecord, MemoryItemRecord, MemoryRevisionAction } from "../types.js";
+import type { MemoryEventRecord, MemoryItemRecord, MemoryRevisionAction, MemorySummaryRecord } from "../types.js";
 
 const NO_ID_PROJECTION = { projection: { _id: 0 } } as const;
 
@@ -240,6 +240,23 @@ export class MemoryRepository {
       .toArray();
   }
 
+  /** Top items by importance (not recency) for a scope - what the profile/workspace summary
+   * cards are built from, since a rarely-mentioned-but-important fact should outrank a recent
+   * but trivial one. */
+  async listTopItems(
+    tenantId: string,
+    userId: string,
+    scope: MemoryItemRecord["scope"],
+    workspaceId: string | null,
+    limit: number,
+  ): Promise<MemoryItemRecord[]> {
+    return memoryItemsCollection()
+      .find({ tenantId, userId, scope, workspaceId, status: "active" }, NO_ID_PROJECTION)
+      .sort({ importance: -1, updatedAt: -1 })
+      .limit(limit)
+      .toArray();
+  }
+
   async deleteItemsBySourceEvent(sourceEventId: string): Promise<void> {
     await memoryItemsCollection().updateMany(
       { sourceEventIds: sourceEventId },
@@ -314,6 +331,28 @@ export class MemoryRepository {
       reason,
       createdAt: new Date(),
     });
+  }
+
+  // --- memory_summaries ------------------------------------------------------------------------
+
+  async getSummary(
+    tenantId: string,
+    userId: string,
+    scope: MemorySummaryRecord["scope"],
+    scopeRef: string | null,
+  ): Promise<MemorySummaryRecord | null> {
+    return memorySummariesCollection().findOne({ tenantId, userId, scope, scopeRef }, NO_ID_PROJECTION);
+  }
+
+  async upsertSummary(summary: Omit<MemorySummaryRecord, "id" | "updatedAt">): Promise<void> {
+    await memorySummariesCollection().updateOne(
+      { tenantId: summary.tenantId, userId: summary.userId, scope: summary.scope, scopeRef: summary.scopeRef },
+      {
+        $set: { ...summary, updatedAt: new Date() },
+        $setOnInsert: { id: randomUUID() },
+      },
+      { upsert: true },
+    );
   }
 
   // --- memory_worker_locks ---------------------------------------------------------------------

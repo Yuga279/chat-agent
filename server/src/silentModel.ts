@@ -13,7 +13,10 @@ import { config } from "./config.js";
 export async function silentJsonCompletion<T>(
   systemPrompt: string,
   userPrompt: string,
-  schema: z.ZodType<T>,
+  // Input left as `any` (default `unknown` would infect callers) rather than tied to T, so a
+  // preprocessing schema (z.preprocess, whose _input is unknown - e.g. extractor.ts's
+  // array-or-object normalization) can be passed here without a mismatched-Input type error.
+  schema: z.ZodType<T, z.ZodTypeDef, any>,
   maxTokens = 500,
 ): Promise<T> {
   const raw =
