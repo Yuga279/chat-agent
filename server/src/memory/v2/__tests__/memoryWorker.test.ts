@@ -86,6 +86,28 @@ describe("MemoryWorker.processBatch - per-event failure isolation", () => {
     expect(repo.failEvent).not.toHaveBeenCalled();
   });
 
+  it("attaches a structured episode payload to every episode-worthy event's candidate", async () => {
+    const withFailure = event({ id: "e1", toolSummaries: [{ toolName: "start", status: "error", startedAt: new Date(), durationMs: 5 }] });
+    const repo = fakeRepo();
+    const extractor = { extractFromEvents: vi.fn(async () => []) };
+    const consolidator = { consolidate: vi.fn(async (_input: { candidate: { kind: string; episode?: unknown; content: string } }) => ({ action: "created" })) };
+    const summarizer = { refreshThreadSummary: vi.fn(async () => {}), refreshProfileCard: vi.fn(async () => {}) };
+    const proceduralMemory = { recordOutcome: vi.fn(async () => null) };
+
+    const worker = new MemoryWorker(repo as any, extractor as any, consolidator as any, summarizer as any, proceduralMemory as any);
+
+    await callProcessBatch(worker, [withFailure]);
+
+    const episodeCall = consolidator.consolidate.mock.calls.find((c) => c[0].candidate.kind === "episodic");
+    if (!episodeCall) throw new Error("expected an episodic consolidate() call");
+    const episode = episodeCall[0].candidate.episode as any;
+    expect(episode).toBeDefined();
+    expect(episode.failed).toBe(true);
+    expect(episode.failedTool).toBe("start");
+    // content is now the structured synthesis, not the raw assistant reply verbatim.
+    expect(episodeCall[0].candidate.content).toContain("->");
+  });
+
   it("does not fail the episode event when only its procedural-memory derivation throws", async () => {
     // Procedural derivation is best-effort on top of an already-recorded episode - its own
     // failure must never fail the event that triggered it.

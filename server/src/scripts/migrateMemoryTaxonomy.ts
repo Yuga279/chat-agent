@@ -1,7 +1,8 @@
 import { connectDb, getDb } from "../db.js";
 import { ensureMemoryV2Indexes } from "../memory/collections.js";
+import { buildEpisodeDetails } from "../memory/v2/episodeBuilder.js";
 import { resolveLegacyKind, expiresAtFor } from "../memory/v2/taxonomy.js";
-import type { MemoryItemRecord, MemoryProvenance } from "../memory/types.js";
+import type { EpisodeDetails, MemoryEventRecord, MemoryItemRecord, MemoryProvenance } from "../memory/types.js";
 
 /**
  * Backfills the taxonomy/lifecycle/provenance fields onto memory_items and memory_revisions rows
@@ -38,6 +39,7 @@ async function main(): Promise<void> {
   const db = getDb();
   const items = db.collection<MemoryItemRecord>("memory_items");
   const revisions = db.collection("memory_revisions");
+  const events = db.collection<MemoryEventRecord>("memory_events");
 
   // --- memory_items: kind/subtype, version chain, lifecycle, provenance ---------------------
 
@@ -114,9 +116,46 @@ async function main(): Promise<void> {
 
   // --- memory_events: backoff gate (reliability stage) -------------------------------------
 
-  const events = db.collection("memory_events");
   const eventsBackfill = await events.updateMany({ nextAttemptAt: { $exists: false } }, { $set: { nextAttemptAt: null } });
   console.log(`memory_events: backfilled nextAttemptAt on ${eventsBackfill.modifiedCount} row(s).`);
+
+  // --- memory_items: episode structure (episode-structure stage) ---------------------------
+
+  // upsertByCanonicalKey now refuses any episodic write with no `episode` payload - existing rows
+  // written before that enforcement (and before EpisodeDetails existed at all) need one backfilled
+  // before anything touches them again (a reinforceItem call on an old episode, for instance).
+  const legacyEpisodes = await items.find({ kind: "episodic", episode: { $exists: false } }).toArray();
+  console.log(`memory_items: ${legacyEpisodes.length} episodic row(s) need structure backfill.`);
+
+  let episodesBackfilled = 0;
+  for (const item of legacyEpisodes) {
+    const sourceEventId = item.sourceEventIds[0];
+    const sourceEvent = sourceEventId ? await events.findOne({ id: sourceEventId }) : null;
+
+    // Reconstruct from the original event when it still exists (the common case); when it's
+    // already been cleaned up (e.g. by thread deletion), fall back to whatever the item itself
+    // still carries rather than fabricating detail that was never observed.
+    const episode: EpisodeDetails = sourceEvent
+      ? buildEpisodeDetails(sourceEvent)
+      : {
+          situation: "unknown - source event no longer exists",
+          objective: "unknown - source event no longer exists",
+          action: [],
+          outcome: item.content,
+          // importance was set to 0.7 for a failed episode and 0.4 otherwise (memoryWorker.ts) -
+          // the only failure signal that survives once the source event is gone.
+          failed: item.importance >= 0.7,
+          failedTool: null,
+          resolution: null,
+          lesson: null,
+          goalId: null,
+          stepIndex: null,
+        };
+
+    await items.updateOne({ id: item.id }, { $set: { episode } });
+    episodesBackfilled += 1;
+  }
+  console.log(`memory_items: backfilled episode structure on ${episodesBackfilled} row(s).`);
 
   // Indexes last, so the new fields exist before anything is indexed on them.
   await ensureMemoryV2Indexes();

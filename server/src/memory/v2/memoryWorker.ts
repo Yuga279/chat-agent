@@ -4,6 +4,7 @@ import { silentModelId } from "../../silentModel.js";
 import { DEFAULT_TENANT_ID } from "../../constants.js";
 import type { MemoryEventRecord, MemoryItemScope, MemoryProvenance } from "../types.js";
 import { memoryConsolidator, type MemoryConsolidator } from "./consolidator.js";
+import { buildEpisodeDetails, episodeContent } from "./episodeBuilder.js";
 import { EXTRACTOR_VERSION, memoryExtractor, type MemoryExtractor } from "./extractor.js";
 import { memoryMetrics } from "./metrics.js";
 import { proceduralMemoryService, type ProceduralMemoryService } from "./proceduralMemory.js";
@@ -190,7 +191,10 @@ export class MemoryWorker {
     for (const event of events) {
       if (!isEpisodeWorthy(event)) continue;
 
-      const failed = event.toolSummaries.some((t) => t.status === "error");
+      // Structured situation/objective/action/outcome/failure/resolution/lesson, derived
+      // deterministically from the event - see episodeBuilder.ts. Previously an episode's
+      // `content` was just `event.assistantText` verbatim, with no structure behind it at all.
+      const episode = buildEpisodeDetails(event);
       const episodeProvenance: MemoryProvenance = {
         // Episodes are derived deterministically from the event record, not proposed by the
         // extractor - so they carry no extraction model/version.
@@ -218,9 +222,10 @@ export class MemoryWorker {
             subject: userId,
             predicate: event.goalId ? "completed_goal_step" : "used_tools",
             object: event.turnId,
-            content: event.assistantText,
+            content: episodeContent(episode),
             confidence: 1,
-            importance: failed ? 0.7 : 0.4,
+            importance: episode.failed ? 0.7 : 0.4,
+            episode,
           },
           sourceEventIds: [event.id],
           provenance: episodeProvenance,
@@ -244,7 +249,7 @@ export class MemoryWorker {
             scope: "workspace",
             workspaceId,
             toolSequence: event.toolSummaries.map((t) => t.toolName),
-            success: !failed,
+            success: !episode.failed,
             sourceEventId: event.id,
             provenance: episodeProvenance,
           });

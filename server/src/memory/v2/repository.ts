@@ -8,6 +8,7 @@ import {
   memoryWorkerLocksCollection,
 } from "../collections.js";
 import type {
+  EpisodeDetails,
   MemoryActorType,
   MemoryEventRecord,
   MemoryItemRecord,
@@ -57,6 +58,10 @@ export interface UpsertByCanonicalKeyInput {
    * upsertByCanonicalKey rather than left to convention, since a procedural item silently missing
    * this would have no steps, no success/failure record, and no validation status at all. */
   procedure?: ProcedureDetails;
+  /** Required when, and only meaningful when, `kind` is "episodic" - same enforcement reasoning
+   * as `procedure`: a silently-missing payload would leave an episode as bare metadata with no
+   * situation/objective/outcome/lesson at all. */
+  episode?: EpisodeDetails;
   /** The currently-active item under this canonical key, if the caller already looked one up
    * (e.g. to make its own decision about whether to write at all) - passed in rather than
    * re-queried here to avoid a redundant findActiveItemByCanonicalKey round-trip. */
@@ -256,6 +261,9 @@ export class MemoryRepository {
     assertValidTaxonomy(fields.kind, fields.subtype, scope);
     if (fields.kind === "procedural" && !fields.procedure) {
       throw new Error("Invalid memory write: kind \"procedural\" requires a `procedure` payload.");
+    }
+    if (fields.kind === "episodic" && !fields.episode) {
+      throw new Error("Invalid memory write: kind \"episodic\" requires an `episode` payload.");
     }
 
     const now = new Date();
@@ -573,13 +581,6 @@ export class MemoryRepository {
       .sort({ importance: -1, updatedAt: -1 })
       .limit(limit)
       .toArray();
-  }
-
-  async deleteItemsBySourceEvent(sourceEventId: string): Promise<void> {
-    await memoryItemsCollection().updateMany(
-      { sourceEventIds: sourceEventId },
-      { $set: { status: "deleted", updatedAt: new Date() } },
-    );
   }
 
   /**

@@ -103,7 +103,7 @@ export type MemorySubtype = SemanticSubtype | EpisodicSubtype | ProceduralSubtyp
  * "superseded" (replaced by a newer value) and "deleted" (removed by a user or by source cleanup),
  * so the audit trail can tell the three apart. */
 export type MemoryItemStatus = "active" | "superseded" | "expired" | "deleted";
-export type MemoryEmbeddingStatus = "pending" | "done" | "failed" | "skipped";
+export type MemoryEmbeddingStatus = "pending" | "done" | "failed";
 
 /** How a durable memory came to exist. Written by the worker (extraction), the remember_fact tool
  * (explicit_tool), or the memories API (user_edit). */
@@ -163,6 +163,44 @@ export interface ProcedureDetails {
   validationStatus: ProcedureValidationStatus;
 }
 
+/**
+ * The narrative structure that makes an episode a *record of an experience* rather than a copy of
+ * the assistant's reply text. Populated only when `kind` is "episodic" - `assertValidTaxonomy`'s
+ * callers additionally check this is present for that kind (see repository.ts's
+ * upsertByCanonicalKey, mirroring how `procedure` is enforced for procedural items).
+ *
+ * Every field is derived deterministically from the originating `MemoryEventRecord` (see
+ * `episodeBuilder.ts`) - no LLM call, matching the cost-control principle the rest of this
+ * pipeline follows (extraction is the only LLM-in-the-loop step; everything else, including this,
+ * is a plain function of data already on hand).
+ */
+export interface EpisodeDetails {
+  /** What the user asked for - the request context this episode is a record of. */
+  situation: string;
+  /** What the turn was trying to accomplish - distinct from `situation` when the episode is one
+   * step of a larger goal rather than a standalone request. */
+  objective: string;
+  /** Ordered tool names actually invoked during this episode. Empty for a goal-step episode that
+   * involved no tool calls at all. */
+  action: string[];
+  /** The final result - what actually happened, in the assistant's own words. */
+  outcome: string;
+  /** Whether any tool call in this episode errored. */
+  failed: boolean;
+  /** The first tool that failed, if any. */
+  failedTool: string | null;
+  /** The tool that succeeded *after* `failedTool` failed, within the same episode - i.e. the turn
+   * recovered on its own. Null when nothing failed, or when a failure was never followed by a
+   * later success in the same turn. */
+  resolution: string | null;
+  /** A short, templated takeaway - present only when this episode's outcome actually generalizes
+   * (a recovered failure, an unrecovered failure, a multi-tool success, or a completed goal step).
+   * Null for a plain single-tool success, since there is nothing to generalize from one clean call. */
+  lesson: string | null;
+  goalId: string | null;
+  stepIndex: number | null;
+}
+
 /** A v2 long-term memory item - the unit consolidation/retrieval operate on. */
 export interface MemoryItemRecord {
   id: string;
@@ -201,6 +239,8 @@ export interface MemoryItemRecord {
   provenance: MemoryProvenance;
   /** Present only when kind is "procedural". */
   procedure?: ProcedureDetails;
+  /** Present only when kind is "episodic". */
+  episode?: EpisodeDetails;
   embedding: number[] | null;
   embeddingStatus: MemoryEmbeddingStatus;
   /** Consecutive embedding failures. A transient failure (below the retry cap) leaves

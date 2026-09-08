@@ -21,7 +21,26 @@ vi.mock("../../collections.js", () => ({
 
 const { MemoryRepository } = await import("../repository.js");
 
+/** A minimal, valid EpisodeDetails - real content isn't the point of these tests (episodeBuilder.ts
+ * has its own tests for that), just a stand-in so an episodic write satisfies upsertByCanonicalKey's
+ * "episodic requires an episode payload" enforcement the same way a real one would. */
+function defaultEpisode() {
+  return {
+    situation: "test situation",
+    objective: "test objective",
+    action: ["some_tool"],
+    outcome: "test outcome",
+    failed: false,
+    failedTool: null,
+    resolution: null,
+    lesson: null,
+    goalId: null,
+    stepIndex: null,
+  };
+}
+
 function baseUpsert(overrides: Record<string, unknown> = {}) {
+  const kind = (overrides.kind as string | undefined) ?? "semantic";
   return {
     tenantId: "default",
     userId: "u1",
@@ -39,6 +58,7 @@ function baseUpsert(overrides: Record<string, unknown> = {}) {
     sensitivity: "none" as const,
     sourceEventIds: ["evt1"],
     provenance: extractionProvenance(),
+    episode: kind === "episodic" ? defaultEpisode() : undefined,
     existing: null,
     revisionAction: "extracted" as const,
     ...overrides,
@@ -136,6 +156,33 @@ describe("MemoryRepository.upsertByCanonicalKey", () => {
     await expect(
       repo.upsertByCanonicalKey(baseUpsert({ kind: "episodic", subtype: "fact" })),
     ).rejects.toThrow(/does not belong to kind/);
+  });
+
+  it("refuses an episodic write with no episode payload", async () => {
+    await expect(
+      repo.upsertByCanonicalKey(
+        baseUpsert({ kind: "episodic", subtype: "episode", canonicalKey: "episode.turn-x", episode: undefined }),
+      ),
+    ).rejects.toThrow(/requires an `episode` payload/);
+  });
+
+  it("stores the structured episode payload verbatim on an episodic write", async () => {
+    const episode = {
+      situation: "user asked to start tracking time",
+      objective: "Fulfill a direct user request, possibly using tools.",
+      action: ["start_time_entry"],
+      outcome: "started the timer",
+      failed: false,
+      failedTool: null,
+      resolution: null,
+      lesson: null,
+      goalId: null,
+      stepIndex: null,
+    };
+    const item = await repo.upsertByCanonicalKey(
+      baseUpsert({ kind: "episodic", subtype: "episode", canonicalKey: "episode.turn-y", episode }),
+    );
+    expect(item.episode).toEqual(episode);
   });
 });
 

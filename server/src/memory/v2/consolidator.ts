@@ -2,7 +2,7 @@ import type { SensitivityLevel } from "./policy.js";
 import { memoryPolicy } from "./policy.js";
 import { memoryMetrics } from "./metrics.js";
 import { memoryRepository, type MemoryRepository } from "./repository.js";
-import type { MemoryItemRecord, MemoryItemScope, MemoryKind, MemoryProvenance, MemorySubtype } from "../types.js";
+import type { EpisodeDetails, MemoryItemRecord, MemoryItemScope, MemoryKind, MemoryProvenance, MemorySubtype } from "../types.js";
 
 /**
  * A candidate ready for consolidation: an extraction candidate with its taxonomy resolved, or an
@@ -20,6 +20,9 @@ export interface ConsolidationCandidate {
   content: string;
   confidence: number;
   importance: number;
+  /** Only ever set (and required) when kind is "episodic" - carried through to the write
+   * unmodified, same as `procedure` is for procedural candidates via a different call path. */
+  episode?: EpisodeDetails;
 }
 
 export interface ConsolidationInput {
@@ -131,6 +134,7 @@ export class MemoryConsolidator {
       sensitivity,
       sourceEventIds,
       provenance,
+      episode: candidate.episode,
       existing,
       revisionAction: provenance.sourceType === "extraction" ? "extracted" : "manual_edit",
     });
