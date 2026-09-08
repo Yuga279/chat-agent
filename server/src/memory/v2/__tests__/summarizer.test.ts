@@ -2,33 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { MemorySummarizer } from "../summarizer.js";
 import type { MemoryRepository } from "../repository.js";
 import type { MemoryItemRecord } from "../../types.js";
+import { memoryItem } from "./fixtures.js";
 
 function item(content: string, importance: number): MemoryItemRecord {
-  return {
-    id: content,
-    tenantId: "default",
-    userId: "u1",
-    scope: "user",
-    workspaceId: null,
-    kind: "preference",
-    canonicalKey: content,
-    subject: "user",
-    predicate: "x",
-    object: "y",
-    content,
-    confidence: 0.9,
-    importance,
-    sensitivity: "none",
-    status: "active",
-    supersedes: null,
-    validFrom: new Date(),
-    validTo: null,
-    sourceEventIds: [],
-    embedding: null,
-    embeddingStatus: "done",
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
+  return memoryItem({ id: content, subtype: "preference", canonicalKey: content, content, importance });
 }
 
 describe("MemorySummarizer.refreshProfileCard", () => {

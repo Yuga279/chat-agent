@@ -11,6 +11,24 @@
  * identifier shapes and topic keywords is easier to audit and cheaper to run on every candidate.
  */
 
+/**
+ * Credentials/secrets - refused outright (see canAutoCapture and, for the explicit tool path,
+ * memoryTools.ts), never merely consent-gated the way "sensitive" content is. There is no
+ * legitimate reason for the agent to persist a live credential, so unlike a health/political fact
+ * a user might deliberately choose to remember, a secret is never offered a consent prompt at all.
+ */
+const SECRET_PATTERNS = [
+  /\bsk-[A-Za-z0-9]{16,}\b/, // OpenAI-style API key
+  /\bsk-ant-[A-Za-z0-9-]{16,}\b/, // Anthropic-style API key
+  /\bAKIA[0-9A-Z]{16}\b/, // AWS access key id
+  /\bghp_[A-Za-z0-9]{36}\b/, // GitHub personal access token
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/, // Slack token
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/, // JWT
+  /-----BEGIN (RSA |EC |OPENSSH |DSA |)PRIVATE KEY-----/, // PEM private key block
+  /\b\w{2,10}:\/\/[^\s:/@]+:[^\s@]+@[^\s]+/, // connection string with embedded credentials
+  /\b(api[_-]?key|secret[_-]?key|access[_-]?token|client[_-]?secret)\s*[:=]\s*['"]?[A-Za-z0-9_\-.]{12,}/i,
+];
+
 const FINANCIAL_ID_PATTERNS = [
   /\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{4}\b/, // card-number-shaped
   /\b\d{3}-\d{2}-\d{4}\b/, // SSN-shaped
@@ -50,7 +68,9 @@ const SENSITIVE_TOPIC_KEYWORDS = [
   "citizenship status",
 ];
 
-export type SensitivityLevel = "none" | "sensitive";
+/** "secret" is strictly worse than "sensitive": a health fact can be remembered with consent, a
+ * live API key never should be, regardless of consent - see canAutoCapture and memoryTools.ts. */
+export type SensitivityLevel = "none" | "sensitive" | "secret";
 
 export interface PolicyCandidate {
   subject: string;
@@ -61,11 +81,15 @@ export interface PolicyCandidate {
 
 export class MemoryPolicy {
   /** Classifies a single extraction candidate. Never throws - an unexpected shape is treated as
-   * sensitive (fail closed) rather than silently auto-captured. */
+   * sensitive (fail closed) rather than silently auto-captured. Checked against the *original-case*
+   * text for secret patterns (many are case-sensitive token shapes, e.g. an API key prefix), and
+   * against the lowercased text for keyword matching. */
   classify(candidate: PolicyCandidate): SensitivityLevel {
     try {
-      const text = `${candidate.subject} ${candidate.predicate} ${candidate.object} ${candidate.content}`.toLowerCase();
+      const rawText = `${candidate.subject} ${candidate.predicate} ${candidate.object} ${candidate.content}`;
+      if (SECRET_PATTERNS.some((p) => p.test(rawText))) return "secret";
 
+      const text = rawText.toLowerCase();
       if (FINANCIAL_ID_PATTERNS.some((p) => p.test(text))) return "sensitive";
       if (GOV_ID_KEYWORDS.some((k) => text.includes(k))) return "sensitive";
       if (SENSITIVE_TOPIC_KEYWORDS.some((k) => text.includes(k))) return "sensitive";
@@ -77,7 +101,10 @@ export class MemoryPolicy {
   }
 
   /** Whether a candidate at this sensitivity level may be written automatically without explicit
-   * user consent - only non-sensitive, reasonably-confident candidates qualify. */
+   * user consent - only non-sensitive, reasonably-confident candidates qualify. A "secret" can
+   * never auto-capture regardless of confidence, same as "sensitive" - the distinction matters at
+   * the call site (memoryTools.ts refuses a secret outright; a merely-sensitive candidate still
+   * gets a consent prompt), not here. */
   canAutoCapture(sensitivity: SensitivityLevel, confidence: number): boolean {
     return sensitivity === "none" && confidence >= 0.6;
   }

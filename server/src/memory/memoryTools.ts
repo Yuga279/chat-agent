@@ -15,12 +15,29 @@ import type { AgentInteraction } from "../graph/interactionTypes.js";
 export function buildMemoryTools(
   tenantId: string,
   userId: string,
-  memoryScope: { scope: MemoryItemScope; workspaceId: string | null } = { scope: "user", workspaceId: null },
+  memoryScope: { scope: MemoryItemScope; workspaceId: string | null; threadId: string | null } = {
+    scope: "user",
+    workspaceId: null,
+    threadId: null,
+  },
 ) {
   const rememberFact = tool(
-    async ({ subject, predicate, object, confidence }) => {
+    async ({ subject, predicate, object, confidence, subtype }) => {
       const content = `${subject} ${predicate}: ${object}`;
       const sensitivity = memoryPolicy.classify({ subject, predicate, object, content });
+
+      // Refused outright, no consent prompt at all - unlike "sensitive" content (a health fact,
+      // say), which a user might deliberately choose to remember, there is no legitimate reason to
+      // persist a live credential, so it never even reaches the interrupt() below.
+      if (sensitivity === "secret") {
+        await memoryRepository.recordRejection(
+          tenantId,
+          userId,
+          { subject, predicate, object, content, canonicalKey: `${subject}.${predicate}`.toLowerCase(), confidence: confidence ?? 0.9 },
+          "policy: content matches a credential/secret pattern - refused outright, never offered for consent",
+        );
+        return "I can't remember that - it looks like it contains a credential or secret, and those are never saved to memory.";
+      }
 
       if (sensitivity === "sensitive") {
         const interaction: AgentInteraction = {
@@ -50,7 +67,8 @@ export function buildMemoryTools(
         userId,
         scope: memoryScope.scope,
         workspaceId: memoryScope.workspaceId,
-        kind: "fact",
+        kind: "semantic",
+        subtype: subtype ?? "fact",
         canonicalKey,
         subject,
         predicate,
@@ -60,6 +78,19 @@ export function buildMemoryTools(
         importance: 0.8,
         sensitivity,
         sourceEventIds: [],
+        // An explicit tool call is the user asserting something directly, so the actor is the
+        // user, not the worker - and there is no extraction model behind it.
+        provenance: {
+          sourceType: "explicit_tool",
+          actorType: "user",
+          actorId: userId,
+          sourceThreadId: memoryScope.threadId,
+          sourceGoalId: null,
+          sourceTurnIds: [],
+          extractedAt: null,
+          extractionModel: null,
+          extractionVersion: null,
+        },
         existing,
         revisionAction: "manual_edit",
         revisionReason: "explicit remember_fact tool call",
@@ -81,6 +112,10 @@ export function buildMemoryTools(
         predicate: z.string(),
         object: z.string(),
         confidence: z.number().min(0).max(1).optional(),
+        subtype: z
+          .enum(["fact", "preference"])
+          .optional()
+          .describe("'preference' for something the user likes/wants, 'fact' for something that is simply true. Defaults to 'fact'."),
       }),
     },
   );

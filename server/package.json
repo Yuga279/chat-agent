@@ -17,6 +17,7 @@
     "verify:agui": "node --env-file=.env dist/scripts/verifyAgUiStream.js",
     "memory:provision-indexes": "node --env-file=.env dist/scripts/provisionMemoryIndexes.js",
     "memory:verify": "node --env-file=.env dist/scripts/verifyMemoryV2.js",
+    "memory:migrate-taxonomy": "node --env-file=.env dist/scripts/migrateMemoryTaxonomy.js",
     "memory:worker": "node --env-file=.env dist/scripts/runMemoryWorker.js",
     "test": "vitest run"
   },

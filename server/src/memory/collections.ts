@@ -86,7 +86,11 @@ export async function ensureThreadIndexes(): Promise<void> {
 export async function ensureMemoryV2Indexes(): Promise<void> {
   await workspacesCollection().createIndex({ tenantId: 1, userId: 1, createdAt: -1 });
 
-  await memoryEventsCollection().createIndex({ status: 1, leaseExpiresAt: 1 });
+  // Two indexes for the eligibility filter's two $or branches: a lease-expired "processing" event
+  // (reclaimed from a crashed worker) matches the first; a backoff-gated "pending" one matches the
+  // second. tenantId leads both, matching findEligibleGroup/leaseEventsForGroup's own $match shape.
+  await memoryEventsCollection().createIndex({ tenantId: 1, status: 1, leaseExpiresAt: 1 });
+  await memoryEventsCollection().createIndex({ tenantId: 1, status: 1, nextAttemptAt: 1 });
   await memoryEventsCollection().createIndex({ tenantId: 1, userId: 1, threadId: 1, createdAt: 1 });
   await memoryEventsCollection().createIndex({ turnId: 1 }, { unique: true });
 
@@ -96,10 +100,17 @@ export async function ensureMemoryV2Indexes(): Promise<void> {
   // workspaceId,status}) - neither index above covers userId+workspaceId together, so that query
   // was falling back to a much less selective index scan.
   await memoryItemsCollection().createIndex({ tenantId: 1, userId: 1, scope: 1, workspaceId: 1, status: 1, importance: -1 });
-  await memoryItemsCollection().createIndex({ tenantId: 1, userId: 1, kind: 1, status: 1 });
+  // Taxonomy filters: subtype is included because retrieval and the memories API both filter by
+  // the narrower category (a preference vs a fact), not just the kind.
+  await memoryItemsCollection().createIndex({ tenantId: 1, userId: 1, kind: 1, subtype: 1, status: 1 });
   await memoryItemsCollection().createIndex({ sourceEventIds: 1 });
   await memoryItemsCollection().createIndex({ embeddingStatus: 1 });
-  await memoryItemsCollection().createIndex({ validTo: 1 });
+  // Drives the worker's lifecycle sweep, whose filter is {status, validTo} - status first because
+  // it is the more selective of the two once most items have settled.
+  await memoryItemsCollection().createIndex({ status: 1, validTo: 1 });
+  // Version-chain walks: "show me every revision of this canonical key" and supersession lookups.
+  await memoryItemsCollection().createIndex({ tenantId: 1, userId: 1, canonicalKey: 1, version: -1 });
+  await memoryItemsCollection().createIndex({ supersededBy: 1 }, { sparse: true });
 
   await memorySummariesCollection().createIndex(
     { tenantId: 1, userId: 1, scope: 1, scopeRef: 1 },
@@ -107,6 +118,9 @@ export async function ensureMemoryV2Indexes(): Promise<void> {
   );
 
   await memoryRevisionsCollection().createIndex({ tenantId: 1, userId: 1, itemId: 1, createdAt: 1 });
+  // Rejected candidates carry itemId: null, so they are only reachable by action - this is what
+  // makes "what did the policy gate refuse for this user?" answerable.
+  await memoryRevisionsCollection().createIndex({ tenantId: 1, userId: 1, action: 1, createdAt: -1 });
 
   await memoryWorkerLocksCollection().createIndex(
     { tenantId: 1, userId: 1, threadId: 1 },

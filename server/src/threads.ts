@@ -28,7 +28,9 @@ export function registerThreadsRoute(app: Express): void {
     }
     // Temporary threads are deliberately excluded from the thread list (PLAN.md's "Temporary
     // chat" requirement) - they're reached only via the in-progress chat itself, never resumed
-    // from a list, and auto-expire on their own (see memoryWorker's TTL sweep).
+    // from a list. Note they are NOT auto-expired: the memory worker's lifecycle sweep expires
+    // stale memory_items, not threads, so a temporary thread row persists until the user ends it
+    // or deletes it. Hiding it from this list is what makes that acceptable.
     const visible = threads.filter((t) => t.memoryMode !== "temporary");
     // The frontend's Thread shape keys on `threadId`, not Mongo's `_id` - map here rather than
     // changing every web/src call site over a purely internal storage-key rename.

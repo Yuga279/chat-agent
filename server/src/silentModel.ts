@@ -10,6 +10,12 @@ import { config } from "./config.js";
  * at all, so there is nothing for that streaming machinery to capture. Use this only for
  * internal, non-conversational decisions (e.g. planning) that must never appear as chat output.
  */
+/** The provider model id silentJsonCompletion() will actually call - recorded in memory provenance
+ * so an extracted item stays attributable after MODEL_PROVIDER or the model name changes. */
+export function silentModelId(): string {
+  return config.modelProvider === "gemini" ? config.geminiModelName : config.modelName;
+}
+
 export async function silentJsonCompletion<T>(
   systemPrompt: string,
   userPrompt: string,

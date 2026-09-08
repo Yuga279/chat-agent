@@ -32,6 +32,7 @@ async function main(): Promise<void> {
           { type: "filter", path: "workspaceId" },
           { type: "filter", path: "status" },
           { type: "filter", path: "kind" },
+          { type: "filter", path: "subtype" },
         ],
       },
     });
@@ -49,11 +50,18 @@ async function main(): Promise<void> {
           fields: {
             canonicalKey: { type: "string" },
             content: { type: "string" },
+            // subject/predicate/object are searchable too: a query naming a fact's subject
+            // ("what timezone is the user in") previously could not match on it, because only
+            // `content` and `canonicalKey` were indexed.
+            subject: { type: "string" },
+            predicate: { type: "string" },
+            object: { type: "string" },
             tenantId: { type: "token" },
             userId: { type: "token" },
             workspaceId: { type: "token" },
             status: { type: "token" },
             kind: { type: "token" },
+            subtype: { type: "token" },
           },
         },
       },

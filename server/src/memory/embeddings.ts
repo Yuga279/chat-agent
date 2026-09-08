@@ -18,7 +18,13 @@ let warnedMissingKey = false;
  * rather than degrading silently, since a silent null here previously looked identical to "no key
  * configured" even when a real bug (e.g. a deprecated model id) was the actual cause.
  */
-export async function embedText(text: string): Promise<number[] | null> {
+/**
+ * `signal` lets a caller on a hard latency budget (MemoryRetriever's query-time embedding, which
+ * used to sit inside a 200ms Promise.race it structurally could not win - the race lost, but the
+ * fetch kept running to completion regardless) bound and actually cancel the request instead of
+ * merely abandoning its result.
+ */
+export async function embedText(text: string, signal?: AbortSignal): Promise<number[] | null> {
   if (!config.geminiApiKey) {
     if (!warnedMissingKey) {
       console.warn(
@@ -38,6 +44,7 @@ export async function embedText(text: string): Promise<number[] | null> {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: { parts: [{ text }] } }),
+        signal,
       },
     );
 
@@ -58,7 +65,11 @@ export async function embedText(text: string): Promise<number[] | null> {
     }
     return body.embedding.values;
   } catch (error) {
-    console.error("embedText: request threw - falling back to substring matching for this call.", error);
+    if (signal?.aborted) {
+      console.warn("embedText: request aborted (timeout) - falling back to substring matching for this call.");
+    } else {
+      console.error("embedText: request threw - falling back to substring matching for this call.", error);
+    }
     return null;
   }
 }
