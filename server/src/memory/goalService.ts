@@ -44,6 +44,12 @@ export class GoalService {
     return goalsCollection().findOne({ tenantId, userId, status: "active" }, NO_ID_PROJECTION);
   }
 
+  /** Single-query combination of getProposedGoal/getActiveGoal - checkGoalNode runs this on every
+   * turn, so collapsing the two sequential findOnes into one saves a Mongo round-trip per turn. */
+  async getProposedOrActiveGoal(tenantId: string, userId: string): Promise<GoalRecord | null> {
+    return goalsCollection().findOne({ tenantId, userId, status: { $in: ["proposed", "active"] } }, NO_ID_PROJECTION);
+  }
+
   async getGoalById(id: string): Promise<GoalRecord | null> {
     return goalsCollection().findOne({ id }, NO_ID_PROJECTION);
   }

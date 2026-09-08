@@ -23,6 +23,8 @@ import type { ResearchPlan } from "./planTypes.js";
 import type { AgentInteraction } from "./interactionTypes.js";
 import { appendNotLinkedButton } from "./notLinkedButton.js";
 import { extractPassiveFacts, persistChatMemory, recordEpisodeForRun, taskFromLatestUserMessage, type ToolCallRecord } from "./executePersistence.js";
+import { withLangfuseTurn } from "../langfuse.js";
+import type { CallbackHandler } from "@langfuse/langchain";
 
 const MAX_TOOL_ITERATIONS = 6;
 
@@ -202,11 +204,23 @@ interface ReactLoopResult {
  * executing an approved plan's steps in one combined pass. Also returns per-call detail
  * (arguments/result/timing) for tool_executions - the episode summary alone is too coarse to be
  * traceable independently. */
-async function runReactLoop(state: GraphState, runConfig: RunnableConfig, externalUserId: string, focusNote?: string): Promise<ReactLoopResult> {
+async function runReactLoopInternal(
+  state: GraphState,
+  runConfig: RunnableConfig,
+  externalUserId: string,
+  handler: CallbackHandler | undefined,
+  focusNote?: string,
+): Promise<ReactLoopResult> {
   const threadId = (runConfig.configurable?.thread_id as string | undefined) ?? null;
   const { tools, systemPrompt } = await resolveContext(externalUserId, threadId, taskFromLatestUserMessage(state));
   const toolsByName = new Map(tools.map((t) => [t.name, t as { invoke: (input: unknown, config?: unknown) => Promise<unknown> }]));
   const modelWithTools = model.bindTools(tools);
+  const tracedConfig = handler
+    ? {
+        ...runConfig,
+        callbacks: Array.isArray(runConfig.callbacks) ? [handler, ...runConfig.callbacks] : [handler],
+      }
+    : runConfig;
 
   const trimmedHistory = await trimHistory(state.messages);
   let messages: BaseMessage[] = [new SystemMessage(systemPrompt), ...trimmedHistory];
@@ -216,7 +230,10 @@ async function runReactLoop(state: GraphState, runConfig: RunnableConfig, extern
   const toolCalls: ToolCallRecord[] = [];
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
-    const response = await modelWithTools.invoke(messages, runConfig);
+    const response = await modelWithTools.invoke(
+      messages,
+      tracedConfig,
+    );
     newMessages.push(response);
     messages = [...messages, response];
 
@@ -225,7 +242,9 @@ async function runReactLoop(state: GraphState, runConfig: RunnableConfig, extern
     for (const call of response.tool_calls) {
       const tool = toolsByName.get(call.name);
       const startedAt = new Date().toISOString();
-      const result: unknown = tool ? await tool.invoke(call.args, runConfig) : `Unknown tool: ${call.name}`;
+      const result: unknown = tool
+        ? await tool.invoke(call.args, tracedConfig)
+        : `Unknown tool: ${call.name}`;
       const completedAt = new Date().toISOString();
       const resultText = typeof result === "string" ? result : JSON.stringify(result);
       toolCalls.push({
@@ -262,6 +281,13 @@ async function runReactLoop(state: GraphState, runConfig: RunnableConfig, extern
   return { messages: newMessages, toolCalls };
 }
 
+async function runReactLoop(state: GraphState, runConfig: RunnableConfig, externalUserId: string, focusNote?: string): Promise<ReactLoopResult> {
+  const threadId = (runConfig.configurable?.thread_id as string | undefined) ?? null;
+  return withLangfuseTurn(externalUserId, threadId, taskFromLatestUserMessage(state), (handler) =>
+    runReactLoopInternal(state, runConfig, externalUserId, handler, focusNote),
+  );
+}
+
 /** Looks up whether this user already has a durable goal (proposed - awaiting approval, or
  * active - mid-execution) before ever asking the planner to decide fresh. This is what makes
  * goal tracking survive across turns/threads/restarts: it's not read from this run's LangGraph
@@ -270,11 +296,8 @@ async function checkGoalNode(state: GraphState, config: RunnableConfig): Promise
   const externalUserId = requireExternalUserId(config);
   await ensureGraphReady();
 
-  const proposed = await goalService.getProposedGoal(DEFAULT_TENANT_ID, externalUserId);
-  if (proposed) return { plan: goalToPlan(proposed), goalId: proposed.id, goalPhase: "proposed" };
-
-  const active = await goalService.getActiveGoal(DEFAULT_TENANT_ID, externalUserId);
-  if (active) return { plan: goalToPlan(active), goalId: active.id, goalPhase: "active" };
+  const goal = await goalService.getProposedOrActiveGoal(DEFAULT_TENANT_ID, externalUserId);
+  if (goal) return { plan: goalToPlan(goal), goalId: goal.id, goalPhase: goal.status as "proposed" | "active" };
 
   return { plan: null, goalId: null, goalPhase: null };
 }
@@ -378,12 +401,17 @@ async function recordTurnMemory(
     return;
   }
 
-  await persistChatMemory(state, runConfig, externalUserId, newMessages);
-  await recordEpisodeForRun(externalUserId, threadId, episodeTask, newMessages, toolCalls, goalId, stepIndex);
-  // Extract from the user's actual latest message, not `episodeTask` (which for a goal step is
-  // its own synthetic title/description) - the user's raw wording is what might carry an
-  // implicit preference/fact.
-  await extractPassiveFacts(externalUserId, userText);
+  // These three are independent, best-effort writes (each already swallows its own errors) that
+  // don't feed back into GraphState - run them concurrently rather than serially so their combined
+  // external HTTP/Mongo latency (embeddings, extraction LLM call) doesn't stack up on the turn.
+  await Promise.all([
+    persistChatMemory(state, runConfig, externalUserId, newMessages),
+    recordEpisodeForRun(externalUserId, threadId, episodeTask, newMessages, toolCalls, goalId, stepIndex),
+    // Extract from the user's actual latest message, not `episodeTask` (which for a goal step is
+    // its own synthetic title/description) - the user's raw wording is what might carry an
+    // implicit preference/fact.
+    extractPassiveFacts(externalUserId, userText),
+  ]);
 }
 
 /** Executes a single-shot request, or - when there's a durable goal - only its current step
@@ -391,6 +419,13 @@ async function recordTurnMemory(
  * state, so after finishing a non-final step we deliberately leave it there for checkGoalNode to
  * pick back up on the next turn, whatever the user's next message says. Only clears `plan`/
  * `goalId` for the non-goal path and once the goal's last step completes. */
+/** Fires recordTurnMemory without blocking the turn on it - none of its writes feed back into
+ * GraphState, and each of its own operations already swallows its own errors, so there's nothing
+ * for the graph run to usefully wait on here. */
+function fireRecordTurnMemory(...args: Parameters<typeof recordTurnMemory>): void {
+  void recordTurnMemory(...args).catch((error) => console.error("recordTurnMemory failed (chat turn continues normally):", error));
+}
+
 async function executeNode(state: GraphState, config: RunnableConfig): Promise<Partial<GraphState>> {
   const externalUserId = requireExternalUserId(config);
   const threadId = (config.configurable?.thread_id as string | undefined) ?? null;
@@ -398,7 +433,7 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
   if (!state.goalId) {
     const { messages: newMessages, toolCalls } = await runReactLoop(state, config, externalUserId);
     appendNotLinkedButton(newMessages);
-    await recordTurnMemory(state, config, externalUserId, threadId, newMessages, toolCalls, null, null, taskFromLatestUserMessage(state));
+    fireRecordTurnMemory(state, config, externalUserId, threadId, newMessages, toolCalls, null, null, taskFromLatestUserMessage(state));
     return { messages: newMessages, plan: null, goalId: null };
   }
 
@@ -409,7 +444,7 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
     // plain single-shot reply rather than getting stuck.
     const { messages: newMessages, toolCalls } = await runReactLoop(state, config, externalUserId);
     appendNotLinkedButton(newMessages);
-    await recordTurnMemory(state, config, externalUserId, threadId, newMessages, toolCalls, null, null, taskFromLatestUserMessage(state));
+    fireRecordTurnMemory(state, config, externalUserId, threadId, newMessages, toolCalls, null, null, taskFromLatestUserMessage(state));
     return { messages: newMessages, plan: null, goalId: null };
   }
 
@@ -419,7 +454,7 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
 
   const { messages: newMessages, toolCalls } = await runReactLoop(state, config, externalUserId, focusNote);
   appendNotLinkedButton(newMessages);
-  await recordTurnMemory(state, config, externalUserId, threadId, newMessages, toolCalls, goal.id, goal.currentStepIndex, stepTask);
+  fireRecordTurnMemory(state, config, externalUserId, threadId, newMessages, toolCalls, goal.id, goal.currentStepIndex, stepTask);
 
   const updatedGoal = await goalService.completeCurrentStep(goal.id);
   if (updatedGoal && updatedGoal.status === "done") {

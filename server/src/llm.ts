@@ -1,5 +1,6 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import "./langfuse.js";
 import { config } from "./config.js";
 
 export function createModel(maxTokens: number) {

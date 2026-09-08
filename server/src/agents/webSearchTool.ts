@@ -84,9 +84,9 @@ export async function searchDuckDuckGo(query: string, maxResults = MAX_RESULTS):
   return results;
 }
 
-/** Web-search tool available to any graph that wants it (assistantGraph.ts, researchGraph.ts) -
- * unlike buildTools()'s MCP tools, this needs no per-user context, so it's a plain singleton
- * rather than something built per externalUserId. */
+/** Web-search tool available to any graph that wants it (assistantGraph.ts) - unlike
+ * buildTools()'s MCP tools, this needs no per-user context, so it's a plain singleton rather
+ * than something built per externalUserId. */
 export function buildWebSearchTool() {
   return tool(
     async ({ query }: { query: string }) => {

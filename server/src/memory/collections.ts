@@ -114,6 +114,10 @@ export async function ensureMemoryV2Indexes(): Promise<void> {
 
   await memoryItemsCollection().createIndex({ tenantId: 1, userId: 1, scope: 1, canonicalKey: 1, status: 1 });
   await memoryItemsCollection().createIndex({ tenantId: 1, scope: 1, workspaceId: 1, status: 1 });
+  // Matches listTopItems/deleteItemsByScope's actual filter shape ({tenantId,userId,scope,
+  // workspaceId,status}) - neither index above covers userId+workspaceId together, so that query
+  // was falling back to a much less selective index scan.
+  await memoryItemsCollection().createIndex({ tenantId: 1, userId: 1, scope: 1, workspaceId: 1, status: 1, importance: -1 });
   await memoryItemsCollection().createIndex({ tenantId: 1, userId: 1, kind: 1, status: 1 });
   await memoryItemsCollection().createIndex({ sourceEventIds: 1 });
   await memoryItemsCollection().createIndex({ embeddingStatus: 1 });

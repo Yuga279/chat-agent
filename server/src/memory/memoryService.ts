@@ -18,6 +18,10 @@ import type {
 const CONVERSATION_WINDOW = 20;
 const MIN_IMPORTANCE_TO_PERSIST = 0.5;
 const NO_ID_PROJECTION = { projection: { _id: 0 } } as const;
+// Cap on how many embedded candidates recall()/findSimilarEpisodes() pull into Node for
+// in-process cosine ranking - without this the scan grows unbounded with a user's memory/episode
+// history. Biased toward the most recent records rather than a random slice.
+const EMBEDDED_CANDIDATE_POOL = 200;
 
 export interface RememberInput {
   tenantId: string;
@@ -182,7 +186,11 @@ export class MemoryService {
       queryEmbedding,
       limit,
       fetchEmbeddedCandidates: () =>
-        semanticMemoriesCollection().find({ ...scopeFilter, embedding: { $ne: null } }, NO_ID_PROJECTION).toArray(),
+        semanticMemoriesCollection()
+          .find({ ...scopeFilter, embedding: { $ne: null } }, NO_ID_PROJECTION)
+          .sort({ updatedAt: -1 })
+          .limit(EMBEDDED_CANDIDATE_POOL)
+          .toArray(),
       fallback: () =>
         semanticMemoriesCollection()
           .find({ ...scopeFilter, content: { $regex: escapeRegExp(query), $options: "i" } }, NO_ID_PROJECTION)
@@ -236,7 +244,11 @@ export class MemoryService {
       queryEmbedding,
       limit,
       fetchEmbeddedCandidates: () =>
-        episodesCollection().find({ tenantId, userId, embedding: { $ne: null } }, NO_ID_PROJECTION).toArray(),
+        episodesCollection()
+          .find({ tenantId, userId, embedding: { $ne: null } }, NO_ID_PROJECTION)
+          .sort({ createdAt: -1 })
+          .limit(EMBEDDED_CANDIDATE_POOL)
+          .toArray(),
       fallback: () =>
         episodesCollection()
           .find({ tenantId, userId, task: { $regex: escapeRegExp(task), $options: "i" } }, NO_ID_PROJECTION)
@@ -247,9 +259,9 @@ export class MemoryService {
   }
 
   // ---- Post-task extraction: classify a message and persist anything durable ----
-  // NOTE: no callers anywhere in the codebase currently (see CLAUDE.md's "known gap" note) -
-  // the old clockwork agent's fire-and-forget fact-extraction pipeline has no equivalent in the
-  // current assistant graph. Kept, not deleted, since it's intended for a future revival.
+  // Called by executePersistence.ts's extractPassiveFacts() on every v1-path turn - this is what
+  // makes semantic_memories populate from normal conversation, not just explicit remember_fact
+  // calls. (CLAUDE.md's "known gap" note describing this as unwired is now stale.)
 
   async extractAndPersist(tenantId: string, userId: string, message: string): Promise<SemanticMemoryRecord[]> {
     const facts = (await this.extractor.extract(message)).filter(
