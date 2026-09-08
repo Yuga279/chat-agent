@@ -1,20 +1,43 @@
 import { randomUUID } from "node:crypto";
 import {
+  NO_ID_PROJECTION,
   memoryEventsCollection,
   memoryItemsCollection,
   memoryRevisionsCollection,
   memorySummariesCollection,
   memoryWorkerLocksCollection,
 } from "../collections.js";
-import type { MemoryEventRecord, MemoryItemRecord, MemoryRevisionAction, MemorySummaryRecord } from "../types.js";
+import type { MemoryEventRecord, MemoryItemRecord, MemoryItemScope, MemoryRevisionAction, MemorySummaryRecord } from "../types.js";
 
-const NO_ID_PROJECTION = { projection: { _id: 0 } } as const;
+export interface UpsertByCanonicalKeyInput {
+  tenantId: string;
+  userId: string;
+  scope: MemoryItemScope;
+  workspaceId: string | null;
+  kind: MemoryItemRecord["kind"];
+  canonicalKey: string;
+  subject: string;
+  predicate: string;
+  object: string;
+  content: string;
+  confidence: number;
+  importance: number;
+  sensitivity: MemoryItemRecord["sensitivity"];
+  sourceEventIds: string[];
+  /** The currently-active item under this canonical key, if the caller already looked one up
+   * (e.g. to make its own decision about whether to write at all) - passed in rather than
+   * re-queried here to avoid a redundant findActiveItemByCanonicalKey round-trip. */
+  existing: MemoryItemRecord | null;
+  /** Revision action recorded against the newly-inserted item - callers differ on whether this
+   * came from an explicit tool call ("manual_edit") or worker extraction ("extracted"). */
+  revisionAction: MemoryRevisionAction;
+  revisionReason?: string | null;
+}
 
 /**
- * Thin Mongo access layer for the v2 collections - MemoryWorker/MemoryConsolidator/MemoryRetriever
- * go through this rather than calling collections.ts directly, so the storage shape can change
- * without touching worker logic. MemoryService remains the narrow facade the graph/routes use;
- * this repository is v2-internal.
+ * Thin Mongo access layer for the memory collections - MemoryWorker/MemoryConsolidator/
+ * MemoryRetriever go through this rather than calling collections.ts directly, so the storage
+ * shape can change without touching worker logic.
  */
 export class MemoryRepository {
   // --- memory_events (outbox) ---------------------------------------------------------------
@@ -158,6 +181,40 @@ export class MemoryRepository {
     );
   }
 
+  /**
+   * Shared write path for "store or update a fact under this canonical key": inserts the new
+   * item (pointing `supersedes` at whatever was active before, if anything), flips the old one to
+   * "superseded" and records that, then records the new item's own revision. Used by both
+   * `remember_fact` (explicit tool call) and `MemoryConsolidator` (worker extraction) - the two
+   * call sites only differ in confidence/importance defaults and which `revisionAction` applies.
+   */
+  async upsertByCanonicalKey(input: UpsertByCanonicalKeyInput): Promise<MemoryItemRecord> {
+    const { tenantId, userId, scope, workspaceId, canonicalKey, existing, revisionAction, revisionReason, ...fields } = input;
+
+    const item = await this.insertItem({
+      tenantId,
+      userId,
+      scope,
+      workspaceId,
+      canonicalKey,
+      status: "active",
+      supersedes: existing?.id ?? null,
+      validFrom: new Date(),
+      validTo: null,
+      embedding: null,
+      embeddingStatus: "pending",
+      ...fields,
+    });
+
+    if (existing) {
+      await this.supersedeItem(existing.id, item.id);
+      await this.recordRevision(tenantId, userId, existing.id, "superseded", existing, { supersedes: item.id });
+    }
+    await this.recordRevision(tenantId, userId, item.id, revisionAction, null, item, revisionReason ?? null);
+
+    return item;
+  }
+
   async deleteItem(id: string): Promise<void> {
     await memoryItemsCollection().updateOne({ id }, { $set: { status: "deleted", updatedAt: new Date() } });
   }
@@ -205,11 +262,18 @@ export class MemoryRepository {
     return after;
   }
 
+  /** Shared by every "mark this item deleted and record why" call site - deleteOwnedItem,
+   * deleteItemsByScope, purgeWorkspace all just differ in which items they select and what reason
+   * string to attach. */
+  private async softDeleteItem(tenantId: string, userId: string, item: MemoryItemRecord, reason: string): Promise<void> {
+    await memoryItemsCollection().updateOne({ id: item.id }, { $set: { status: "deleted", updatedAt: new Date() } });
+    await this.recordRevision(tenantId, userId, item.id, "deleted", item, null, reason);
+  }
+
   async deleteOwnedItem(tenantId: string, userId: string, id: string): Promise<boolean> {
     const before = await this.getOwnedItem(tenantId, userId, id);
     if (!before) return false;
-    await memoryItemsCollection().updateOne({ id, tenantId, userId }, { $set: { status: "deleted", updatedAt: new Date() } });
-    await this.recordRevision(tenantId, userId, id, "deleted", before, null, "user delete via /api/memories");
+    await this.softDeleteItem(tenantId, userId, before, "user delete via /api/memories");
     return true;
   }
 
@@ -223,8 +287,7 @@ export class MemoryRepository {
       .find({ tenantId, userId, scope, workspaceId, status: "active" }, NO_ID_PROJECTION)
       .toArray();
     for (const item of items) {
-      await memoryItemsCollection().updateOne({ id: item.id }, { $set: { status: "deleted", updatedAt: new Date() } });
-      await this.recordRevision(tenantId, userId, item.id, "deleted", item, null, "user clear-all via /api/memories");
+      await this.softDeleteItem(tenantId, userId, item, "user clear-all via /api/memories");
     }
     return items.length;
   }
@@ -303,8 +366,7 @@ export class MemoryRepository {
   async purgeWorkspace(tenantId: string, workspaceId: string): Promise<void> {
     const items = await memoryItemsCollection().find({ tenantId, workspaceId, status: "active" }, NO_ID_PROJECTION).toArray();
     for (const item of items) {
-      await memoryItemsCollection().updateOne({ id: item.id }, { $set: { status: "deleted", updatedAt: new Date() } });
-      await this.recordRevision(tenantId, item.userId, item.id, "deleted", item, null, `workspace ${workspaceId} deleted`);
+      await this.softDeleteItem(tenantId, item.userId, item, `workspace ${workspaceId} deleted`);
     }
     await memorySummariesCollection().deleteMany({ tenantId, scope: "workspace", scopeRef: workspaceId });
   }

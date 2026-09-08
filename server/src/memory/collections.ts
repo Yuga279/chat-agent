@@ -1,30 +1,19 @@
 import { getDb } from "../db.js";
 import type {
-  ConversationMessageRecord,
-  EpisodeRecord,
   GoalRecord,
   MemoryEventRecord,
   MemoryItemRecord,
   MemoryRevisionRecord,
   MemorySummaryRecord,
   MemoryWorkerLockRecord,
-  SemanticMemoryRecord,
   ThreadRecord,
   UserMemorySettingsRecord,
   WorkspaceRecord,
 } from "./types.js";
 
-export function conversationMessagesCollection() {
-  return getDb().collection<ConversationMessageRecord>("conversation_messages");
-}
-
-export function semanticMemoriesCollection() {
-  return getDb().collection<SemanticMemoryRecord>("semantic_memories");
-}
-
-export function episodesCollection() {
-  return getDb().collection<EpisodeRecord>("episodes");
-}
+/** Shared by every read path across this repo's Mongo access layers (repository.ts,
+ * workspaceService.ts, goalService.ts) that never needs the raw `_id`. */
+export const NO_ID_PROJECTION = { projection: { _id: 0 } } as const;
 
 export function goalsCollection() {
   return getDb().collection<GoalRecord>("goals");
@@ -66,18 +55,7 @@ export function userMemorySettingsCollection() {
   return getDb().collection<UserMemorySettingsRecord>("user_memory_settings");
 }
 
-export async function ensureMemoryIndexes(): Promise<void> {
-  await conversationMessagesCollection().createIndex({ sessionId: 1, createdAt: 1 });
-  await conversationMessagesCollection().createIndex({ tenantId: 1, userId: 1, threadId: 1, createdAt: 1 });
-
-  await semanticMemoriesCollection().createIndex({ tenantId: 1, userId: 1, subject: 1, predicate: 1, status: 1 });
-  await semanticMemoriesCollection().createIndex({ tenantId: 1, userId: 1, type: 1, status: 1 });
-  await semanticMemoriesCollection().createIndex({ tenantId: 1, scope: 1, status: 1 });
-
-  await episodesCollection().createIndex({ tenantId: 1, userId: 1, task: 1 });
-  await episodesCollection().createIndex({ tenantId: 1, userId: 1, threadId: 1 });
-  await episodesCollection().createIndex({ tenantId: 1, userId: 1, goalId: 1 });
-
+export async function ensureGoalIndexes(): Promise<void> {
   await goalsCollection().createIndex({ tenantId: 1, userId: 1, status: 1, createdAt: -1 });
   await goalsCollection().createIndex({ tenantId: 1, threadId: 1 });
 }

@@ -10,14 +10,51 @@ function fakeRepo(existing: MemoryItemRecord | null) {
     createdAt: new Date(),
     updatedAt: new Date(),
   }));
-  const supersedeItem = vi.fn(async () => {});
-  const recordRevision = vi.fn(async () => {});
+  const supersedeItem = vi.fn(async (_oldId: string, _newId: string) => {});
+  const recordRevision = vi.fn(
+    async (
+      _tenantId: string,
+      _userId: string,
+      _itemId: string,
+      _action: string,
+      _before: unknown,
+      _after: unknown,
+      _reason?: string | null,
+    ) => {},
+  );
   const findActiveItemByCanonicalKey = vi.fn(async () => existing);
-  return { insertItem, supersedeItem, recordRevision, findActiveItemByCanonicalKey } as unknown as MemoryRepository & {
+  // Mirrors the real MemoryRepository.upsertByCanonicalKey's insert/supersede/revision sequence,
+  // routed through this fake's own tracked mocks so assertions on them still work.
+  const upsertByCanonicalKey = vi.fn(
+    async ({
+      existing: existingItem,
+      revisionAction,
+      revisionReason,
+      ...fields
+    }: Parameters<MemoryRepository["upsertByCanonicalKey"]>[0]) => {
+      const item = await insertItem({
+        ...fields,
+        status: "active",
+        supersedes: existingItem?.id ?? null,
+        validFrom: new Date(),
+        validTo: null,
+        embedding: null,
+        embeddingStatus: "pending",
+      });
+      if (existingItem) {
+        await supersedeItem(existingItem.id, item.id);
+        await recordRevision(fields.tenantId, fields.userId, existingItem.id, "superseded", existingItem, { supersedes: item.id });
+      }
+      await recordRevision(fields.tenantId, fields.userId, item.id, revisionAction, null, item, revisionReason ?? null);
+      return item;
+    },
+  );
+  return { insertItem, supersedeItem, recordRevision, findActiveItemByCanonicalKey, upsertByCanonicalKey } as unknown as MemoryRepository & {
     insertItem: typeof insertItem;
     supersedeItem: typeof supersedeItem;
     recordRevision: typeof recordRevision;
     findActiveItemByCanonicalKey: typeof findActiveItemByCanonicalKey;
+    upsertByCanonicalKey: typeof upsertByCanonicalKey;
   };
 }
 

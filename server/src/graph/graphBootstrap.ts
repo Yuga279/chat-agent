@@ -1,5 +1,5 @@
 import { connectDb } from "../db.js";
-import { ensureMemoryIndexes, ensureMemoryV2Indexes, ensureThreadIndexes } from "../memory/collections.js";
+import { ensureGoalIndexes, ensureMemoryV2Indexes, ensureThreadIndexes } from "../memory/collections.js";
 
 let readyPromise: Promise<void> | undefined;
 /** Connects to Mongo and ensures indexes exist, memoized so it only runs once per process.
@@ -8,7 +8,7 @@ let readyPromise: Promise<void> | undefined;
 export function ensureGraphReady(): Promise<void> {
   if (!readyPromise) {
     readyPromise = connectDb().then(async () => {
-      await ensureMemoryIndexes();
+      await ensureGoalIndexes();
       await ensureThreadIndexes();
       await ensureMemoryV2Indexes();
     });

@@ -44,8 +44,7 @@ export class MemoryConsolidator {
       return { action: "updated", item: existing };
     }
 
-    const now = new Date();
-    const newItem = await this.repo.insertItem({
+    const item = await this.repo.upsertByCanonicalKey({
       tenantId,
       userId,
       scope,
@@ -59,22 +58,12 @@ export class MemoryConsolidator {
       confidence: candidate.confidence,
       importance: candidate.importance,
       sensitivity,
-      status: "active",
-      supersedes: existing?.id ?? null,
-      validFrom: now,
-      validTo: null,
       sourceEventIds,
-      embedding: null,
-      embeddingStatus: "pending",
+      existing,
+      revisionAction: "extracted",
     });
 
-    if (existing) {
-      await this.repo.supersedeItem(existing.id, newItem.id);
-      await this.repo.recordRevision(tenantId, userId, existing.id, "superseded", existing, { supersedes: newItem.id });
-    }
-    await this.repo.recordRevision(tenantId, userId, newItem.id, "extracted", null, newItem);
-
-    return { action: existing ? "updated" : "created", item: newItem };
+    return { action: existing ? "updated" : "created", item };
   }
 }
 

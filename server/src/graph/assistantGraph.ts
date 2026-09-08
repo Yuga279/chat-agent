@@ -6,7 +6,7 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage, trimMessages, type
 import { model } from "../llm.js";
 import { buildTools } from "../agents/sharedTools.js";
 import { buildWebSearchTool } from "../agents/webSearchTool.js";
-import { buildGoalTools, buildMemoryTools, composePreferenceContext } from "../memory/memoryTools.js";
+import { buildGoalTools, buildMemoryTools } from "../memory/memoryTools.js";
 import { goalService } from "../memory/goalService.js";
 import type { GoalRecord, MemoryItemScope } from "../memory/types.js";
 import { extractText } from "../agents/shared.js";
@@ -22,11 +22,24 @@ import { isMemoryEnabledForUser } from "../memory/v2/memorySettingsService.js";
 import type { ResearchPlan } from "./planTypes.js";
 import type { AgentInteraction } from "./interactionTypes.js";
 import { appendNotLinkedButton } from "./notLinkedButton.js";
-import { extractPassiveFacts, persistChatMemory, recordEpisodeForRun, taskFromLatestUserMessage, type ToolCallRecord } from "./executePersistence.js";
 import { withLangfuseTurn } from "../langfuse.js";
 import type { CallbackHandler } from "@langfuse/langchain";
 
 const MAX_TOOL_ITERATIONS = 6;
+
+export interface ToolCallRecord {
+  toolName: string;
+  arguments: Record<string, unknown> | undefined;
+  result: unknown;
+  status: "success" | "error" | "timeout";
+  startedAt: string;
+  completedAt: string;
+}
+
+function taskFromLatestUserMessage(state: { messages: BaseMessage[] }): string {
+  const latestUserMessage = [...state.messages].reverse().find((m) => m.getType() === "human");
+  return latestUserMessage ? String(latestUserMessage.content) : "";
+}
 
 // LangGraph's thread checkpointing keeps every message for the life of a thread, and nothing
 // upstream of runReactLoop ever shrinks it - without this, a long-running thread eventually
@@ -106,24 +119,21 @@ export interface ThreadMemorySettings {
   memoryMode: "normal" | "temporary";
 }
 
-/** Whether this turn should read/write memory at all - a temporary thread, v2 retrieval
- * explicitly disabled, or the user's own global off switch, all mean "treat this like memory
- * doesn't exist for this turn." */
+/** Whether this turn should read/write memory at all - a temporary thread, retrieval explicitly
+ * disabled, or the user's own global off switch, all mean "treat this like memory doesn't exist
+ * for this turn." */
 async function memoryActiveForTurn(settings: ThreadMemorySettings, externalUserId: string): Promise<boolean> {
   if (settings.memoryMode === "temporary") return false;
-  if (appConfig.memoryV2Enabled) {
-    if (!appConfig.memoryRetrievalEnabled) return false;
-    if (!(await isMemoryEnabledForUser(DEFAULT_TENANT_ID, externalUserId))) return false;
-  }
+  if (!appConfig.memoryRetrievalEnabled) return false;
+  if (!(await isMemoryEnabledForUser(DEFAULT_TENANT_ID, externalUserId))) return false;
   return true;
 }
 
 /**
  * Builds this turn's tools + system prompt. Goal tools (get_active_goals) are always available -
  * a durable goal is orthogonal to memory being paused. Memory tools/context are omitted entirely
- * when the thread is temporary or memory is globally disabled; otherwise, under MEMORY_V2_ENABLED,
- * a bounded profile/summary/retrieved-item context is composed via MemoryRetriever instead of the
- * legacy composePreferenceContext() full-collection read.
+ * when the thread is temporary or memory is globally disabled; otherwise a bounded profile/
+ * summary/retrieved-item context is composed via MemoryRetriever.
  */
 async function resolveContext(externalUserId: string, threadId: string | null, latestUserText: string) {
   await ensureGraphReady();
@@ -143,12 +153,6 @@ async function resolveContext(externalUserId: string, threadId: string | null, l
   const scope: MemoryItemScope = settings.workspaceId ? "workspace" : "user";
   const memoryTools = buildMemoryTools(DEFAULT_TENANT_ID, externalUserId, { scope, workspaceId: settings.workspaceId });
   const tools = [...mcpTools, buildWebSearchTool(), ...memoryTools, ...goalTools];
-
-  if (!appConfig.memoryV2Enabled) {
-    const preferenceContext = await composePreferenceContext(DEFAULT_TENANT_ID, externalUserId);
-    const systemPrompt = preferenceContext ? `${ASSISTANT_SYSTEM_PROMPT}\n\n${preferenceContext}` : ASSISTANT_SYSTEM_PROMPT;
-    return { tools, systemPrompt };
-  }
 
   const memoryContext = await memoryRetriever.getContext(DEFAULT_TENANT_ID, externalUserId, threadId ?? "", settings.workspaceId, latestUserText);
   const contextLines: string[] = [];
@@ -360,58 +364,40 @@ async function planReviewNode(state: GraphState): Promise<Partial<GraphState>> {
 }
 
 /**
- * Records this turn's memory - the graph's one memory-writing decision point. Under
- * MEMORY_V2_ENABLED, replaces the old synchronous persistChatMemory + recordEpisodeForRun +
- * extractPassiveFacts sequence with a single enqueueTurnMemoryEvent() outbox write; a temporary
- * thread skips this entirely (no event, no legacy write either). Otherwise falls back to the v1
- * synchronous path unchanged, so existing behavior is preserved until v2 is verified and enabled.
+ * Records this turn's memory - the graph's one memory-writing decision point. A single
+ * enqueueTurnMemoryEvent() outbox write; a temporary thread, or memory capture/settings being
+ * off, skips this entirely (no event written at all).
  */
 async function recordTurnMemory(
   state: GraphState,
-  runConfig: RunnableConfig,
   externalUserId: string,
   threadId: string | null,
   newMessages: Array<AIMessage | ToolMessage>,
   toolCalls: ToolCallRecord[],
   goalId: string | null,
   stepIndex: number | null,
-  episodeTask: string,
 ): Promise<void> {
-  const settings = threadId ? await getThreadMemorySettings(threadId) : { workspaceId: null, memoryMode: "normal" as const };
+  if (!appConfig.memoryCaptureEnabled || !threadId) return;
+
+  const settings = await getThreadMemorySettings(threadId);
   if (settings.memoryMode === "temporary") return;
+  if (!(await isMemoryEnabledForUser(DEFAULT_TENANT_ID, externalUserId))) return;
 
   const userText = taskFromLatestUserMessage(state);
   const finalReply = [...newMessages].reverse().find((m) => m.getType() === "ai" && extractText(m.content).length > 0);
   const assistantText = finalReply ? extractText(finalReply.content) : "";
 
-  if (appConfig.memoryV2Enabled) {
-    if (!appConfig.memoryCaptureEnabled || !threadId) return;
-    if (!(await isMemoryEnabledForUser(DEFAULT_TENANT_ID, externalUserId))) return;
-    await enqueueTurnMemoryEvent({
-      tenantId: DEFAULT_TENANT_ID,
-      userId: externalUserId,
-      threadId,
-      workspaceId: settings.workspaceId,
-      userText,
-      assistantText,
-      toolCalls,
-      goalId,
-      stepIndex,
-    });
-    return;
-  }
-
-  // These three are independent, best-effort writes (each already swallows its own errors) that
-  // don't feed back into GraphState - run them concurrently rather than serially so their combined
-  // external HTTP/Mongo latency (embeddings, extraction LLM call) doesn't stack up on the turn.
-  await Promise.all([
-    persistChatMemory(state, runConfig, externalUserId, newMessages),
-    recordEpisodeForRun(externalUserId, threadId, episodeTask, newMessages, toolCalls, goalId, stepIndex),
-    // Extract from the user's actual latest message, not `episodeTask` (which for a goal step is
-    // its own synthetic title/description) - the user's raw wording is what might carry an
-    // implicit preference/fact.
-    extractPassiveFacts(externalUserId, userText),
-  ]);
+  await enqueueTurnMemoryEvent({
+    tenantId: DEFAULT_TENANT_ID,
+    userId: externalUserId,
+    threadId,
+    workspaceId: settings.workspaceId,
+    userText,
+    assistantText,
+    toolCalls,
+    goalId,
+    stepIndex,
+  });
 }
 
 /** Executes a single-shot request, or - when there's a durable goal - only its current step
@@ -433,7 +419,7 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
   if (!state.goalId) {
     const { messages: newMessages, toolCalls } = await runReactLoop(state, config, externalUserId);
     appendNotLinkedButton(newMessages);
-    fireRecordTurnMemory(state, config, externalUserId, threadId, newMessages, toolCalls, null, null, taskFromLatestUserMessage(state));
+    fireRecordTurnMemory(state, externalUserId, threadId, newMessages, toolCalls, null, null);
     return { messages: newMessages, plan: null, goalId: null };
   }
 
@@ -444,7 +430,7 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
     // plain single-shot reply rather than getting stuck.
     const { messages: newMessages, toolCalls } = await runReactLoop(state, config, externalUserId);
     appendNotLinkedButton(newMessages);
-    fireRecordTurnMemory(state, config, externalUserId, threadId, newMessages, toolCalls, null, null, taskFromLatestUserMessage(state));
+    fireRecordTurnMemory(state, externalUserId, threadId, newMessages, toolCalls, null, null);
     return { messages: newMessages, plan: null, goalId: null };
   }
 
@@ -454,7 +440,7 @@ async function executeNode(state: GraphState, config: RunnableConfig): Promise<P
 
   const { messages: newMessages, toolCalls } = await runReactLoop(state, config, externalUserId, focusNote);
   appendNotLinkedButton(newMessages);
-  fireRecordTurnMemory(state, config, externalUserId, threadId, newMessages, toolCalls, goal.id, goal.currentStepIndex, stepTask);
+  fireRecordTurnMemory(state, externalUserId, threadId, newMessages, toolCalls, goal.id, goal.currentStepIndex);
 
   const updatedGoal = await goalService.completeCurrentStep(goal.id);
   if (updatedGoal && updatedGoal.status === "done") {

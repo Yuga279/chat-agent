@@ -2,9 +2,10 @@ import { z } from "zod";
 import { silentJsonCompletion } from "../../silentModel.js";
 import type { MemoryEventRecord } from "../types.js";
 import { memoryRepository, type MemoryRepository } from "./repository.js";
+import { tokenBudgetToChars } from "./tokenBudget.js";
 
 const SUMMARY_TOKEN_BUDGET = 250;
-const SUMMARY_CHAR_BUDGET = SUMMARY_TOKEN_BUDGET * 4; // ~4 chars/token, same rough estimate MemoryRetriever uses
+const SUMMARY_CHAR_BUDGET = tokenBudgetToChars(SUMMARY_TOKEN_BUDGET);
 const PROFILE_ITEM_LIMIT = 12;
 
 const SUMMARY_SCHEMA = z.object({ summary: z.string() });

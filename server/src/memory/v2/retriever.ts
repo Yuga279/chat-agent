@@ -1,6 +1,7 @@
 import { memoryItemsCollection, memorySummariesCollection } from "../collections.js";
 import { embedText } from "../embeddings.js";
 import type { MemoryItemRecord, MemorySummaryRecord } from "../types.js";
+import { estimateTokens, truncateToTokenBudget } from "./tokenBudget.js";
 
 const PROFILE_TOKEN_BUDGET = 250;
 const SUMMARY_TOKEN_BUDGET = 250;
@@ -18,12 +19,6 @@ export interface MemoryContext {
 
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([promise, new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))]);
-}
-
-/** ~4 chars/token, good enough for a soft budget guard - not exact tokenization. */
-function truncateToTokenBudget(text: string, tokenBudget: number): string {
-  const charBudget = tokenBudget * 4;
-  return text.length <= charBudget ? text : text.slice(0, charBudget);
 }
 
 /**
@@ -173,7 +168,7 @@ export class MemoryRetriever {
     let usedTokens = 0;
     for (const item of ranked) {
       if (budgeted.length >= MAX_INJECTED_ITEMS) break;
-      const estTokens = Math.ceil(item.content.length / 4);
+      const estTokens = estimateTokens(item.content);
       if (usedTokens + estTokens > RETRIEVED_ITEMS_TOKEN_BUDGET) continue;
       budgeted.push(item);
       usedTokens += estTokens;

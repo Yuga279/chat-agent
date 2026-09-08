@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { workspacesCollection } from "../collections.js";
+import { NO_ID_PROJECTION, workspacesCollection } from "../collections.js";
 import type { WorkspaceRecord } from "../types.js";
-
-const NO_ID_PROJECTION = { projection: { _id: 0 } } as const;
 
 /** User-owned chat workspaces - CRUD only, no membership/sharing model (single-user-per-workspace
  * today, per PLAN.md's scope). */

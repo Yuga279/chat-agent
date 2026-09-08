@@ -2,9 +2,9 @@ import { connectDb, getDb } from "../db.js";
 import { embedText } from "../memory/embeddings.js";
 
 /**
- * Pre-rollout gate for MEMORY_V2_ENABLED: confirms the two Atlas Search indexes exist and are
- * queryable, and that a live Gemini embedding call actually succeeds - both must pass before v2
- * retrieval can work at all.
+ * Pre-deploy gate for the memory pipeline: confirms the two Atlas Search indexes exist and are
+ * queryable, and that a live Gemini embedding call actually succeeds - both must pass before
+ * memory retrieval can work at all.
  *
  * Run with: node --env-file=.env dist/scripts/verifyMemoryV2.js
  */
@@ -37,7 +37,7 @@ async function main(): Promise<void> {
   }
 
   if (!ok) {
-    console.error("memory:verify FAILED - do not enable MEMORY_V2_ENABLED yet.");
+    console.error("memory:verify FAILED - do not deploy until this passes.");
     process.exit(1);
   }
   console.log("memory:verify passed.");

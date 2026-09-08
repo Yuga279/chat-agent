@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { goalsCollection } from "./collections.js";
+import { NO_ID_PROJECTION, goalsCollection } from "./collections.js";
 import type { GoalRecord, GoalStep } from "./types.js";
-
-const NO_ID_PROJECTION = { projection: { _id: 0 } } as const;
 
 /**
  * Backs assistantGraph.ts's durable, cross-turn goal tracking: a multi-step plan is persisted

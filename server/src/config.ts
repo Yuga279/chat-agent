@@ -19,9 +19,9 @@ export const config = {
   mongoDbName: process.env.MONGO_DB_NAME ?? "chat_agent",
   port: Number(process.env.PORT ?? 3200),
 
-  // Memory v2 (see PLAN.md / CLAUDE.md's memory section). All default off/conservative so v1
-  // behavior is unchanged until Atlas indexes + Gemini creds + `npm run memory:verify` pass.
-  memoryV2Enabled: process.env.MEMORY_V2_ENABLED === "true",
+  // Master switches for the memory pipeline's capture (write) and retrieval (read) sides,
+  // independently toggleable - e.g. to disable the worker's write path without a redeploy, or to
+  // turn off retrieval if Atlas Search misbehaves, without losing the other.
   memoryCaptureEnabled: process.env.MEMORY_CAPTURE_ENABLED !== "false",
   memoryRetrievalEnabled: process.env.MEMORY_RETRIEVAL_ENABLED !== "false",
 };
