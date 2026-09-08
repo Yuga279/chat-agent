@@ -16,7 +16,7 @@ export const config = {
   geminiModelName: process.env.GEMINI_MODEL_NAME ?? "gemini-2.5-flash",
   jwtSecret: requireEnv("JWT_SECRET"),
   mongoUri: process.env.MONGO_URI ?? "mongodb://localhost:27017/",
-  mongoDbName: process.env.MONGO_DB_NAME ?? "chat_agent",
+  mongoDbName: process.env.MONGO_DB_NAME ?? "system1_chat_agent",
   port: Number(process.env.PORT ?? 3200),
 
   // Master switches for the memory pipeline's capture (write) and retrieval (read) sides,
